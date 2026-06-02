@@ -199,3 +199,37 @@ class TwitterApiIoClient:
                 break
             cursor = data["next_cursor"]
         return out
+
+    @staticmethod
+    def _norm_member(u: dict) -> dict:
+        """リストメンバー(=ユーザー)を XClient と同じプロフィールdictに正規化。"""
+        followers = u.get("followers")
+        if followers is None:
+            followers = u.get("followersCount") or u.get("followers_count")
+        return {
+            "id": str(u.get("id", "")),
+            "username": u.get("userName") or u.get("screen_name"),
+            "name": u.get("name"),
+            "description": u.get("description") or "",
+            "profile_image_url": u.get("profilePicture") or u.get("profile_image_url"),
+            "followers_count": _as_int(followers),
+        }
+
+    def get_list_members(self, list_id: str, max_total: int = 100) -> list[dict]:
+        # 公式 XClient.get_list_members と同じプロフィールdictを返す。メンバーは 20件/頁・cursor。
+        out: list[dict] = []
+        cursor = ""
+        for _ in range(_MAX_PAGES):
+            data = self._get(
+                "/twitter/list/get_list_members",
+                {"listId": str(list_id), "cursor": cursor},
+            )
+            members = data.get("members") or data.get("users") or []
+            for u in members:
+                out.append(self._norm_member(u))
+                if len(out) >= max_total:
+                    return out
+            if not data.get("has_next_page") or not data.get("next_cursor"):
+                break
+            cursor = data["next_cursor"]
+        return out

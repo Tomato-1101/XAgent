@@ -166,3 +166,47 @@ class TargetRequest(BaseModel):
     keyword: str | None = None
     notes: str | None = None
     resolve_user_id: bool = True  # X APIでuser_idを解決するか
+
+
+# --- Xネイティブ「リスト」 ---
+class ListRead(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    private: bool = False
+    member_count: int = 0
+
+
+class ListMember(BaseModel):
+    id: str
+    username: str | None = None
+    name: str | None = None
+    description: str = ""
+    profile_image_url: str | None = None
+    followers_count: int = 0
+
+
+class ListCreateRequest(BaseModel):
+    name: str
+    accounts: list[str] = []  # ハンドル一覧(@有無どちらでも可)
+    description: str = ""
+    private: bool = True
+
+
+class ListCreateResult(BaseModel):
+    list_id: str
+    url: str
+    name: str
+    added: list[str]
+    skipped: list[dict]
+
+
+class ListUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    private: bool | None = None
+
+
+class ListMemberAddRequest(BaseModel):
+    handle: str | None = None
+    user_id: str | None = None

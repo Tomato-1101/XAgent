@@ -328,6 +328,38 @@ def repost(tweet_id: str, at: str | None = None) -> dict:
         return _draft_view(d)
 
 
+# --- Xネイティブ「リスト」 -----------------------------------------------------
+
+@mcp.tool()
+def create_x_list(
+    name: str,
+    accounts: list[str],
+    description: str = "",
+    private: bool = True,
+) -> dict:
+    """アカウント一覧からXネイティブのリストを作成し、解決できたものを一括メンバー追加する。
+
+    書き込み(作成/追加)は公式X APIのみ。戻り値に list URL・追加件数・スキップ(理由付き)。
+    """
+    from . import lists as lists_mod
+
+    return lists_mod.create_list_from_handles(
+        XClient.from_settings(), name, accounts, description=description, private=private
+    )
+
+
+@mcp.tool()
+def list_x_lists(max_total: int = 100) -> list[dict]:
+    """自分が作成した(所有)リスト一覧を返す。"""
+    return XClient.from_settings().get_owned_lists(max_total=max_total)
+
+
+@mcp.tool()
+def get_x_list_members(list_id: str, max_total: int = 100) -> list[dict]:
+    """指定リストのメンバーをプロフィール(表示名/bio/フォロワー数)付きで返す。"""
+    return XClient.from_settings().get_list_members(list_id, max_total=max_total)
+
+
 def main() -> None:
     init_db()
     mcp.run()

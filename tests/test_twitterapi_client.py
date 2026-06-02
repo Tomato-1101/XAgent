@@ -149,3 +149,33 @@ def test_get_user_by_username_normalizes(monkeypatch):
 
     c = _client_with(monkeypatch, handler)
     assert c.get_user_by_username("@famous") == {"id": "42", "username": "famous"}
+
+
+def test_list_members_normalize_and_paginate(monkeypatch):
+    pages = {
+        "": {
+            "members": [{
+                "id": "11", "userName": "alice", "name": "Alice",
+                "description": "bio", "profilePicture": "http://img", "followers": 42,
+            }],
+            "has_next_page": True, "next_cursor": "c1",
+        },
+        "c1": {
+            "members": [{"id": "12", "userName": "bob", "name": "Bob", "followers": 5}],
+            "has_next_page": False,
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("listId") == "999"
+        return httpx.Response(200, json=pages[request.url.params.get("cursor", "")])
+
+    c = _client_with(monkeypatch, handler)
+    out = c.get_list_members("999")
+    assert out[0] == {
+        "id": "11", "username": "alice", "name": "Alice", "description": "bio",
+        "profile_image_url": "http://img", "followers_count": 42,
+    }
+    assert [m["username"] for m in out] == ["alice", "bob"]
+    assert out[1]["description"] == ""          # description欠落→""
+    assert out[1]["profile_image_url"] is None  # profilePicture欠落→None

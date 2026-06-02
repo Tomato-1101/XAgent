@@ -368,6 +368,33 @@ def targets_list() -> None:
             typer.echo(f"#{t.id} @{t.handle} user_id={t.user_id} active={t.active}")
 
 
+@app.command("x-list-create")
+def x_list_create(
+    name: str = typer.Argument(..., help="リスト名"),
+    accounts: str = typer.Argument("", help="ハンドルのカンマ区切り(@有無どちらでも)"),
+    file: str = typer.Option(None, "--file", "-f", help="ハンドルを1行1件で書いたファイル"),
+    description: str = typer.Option("", "--description", help="リストの説明"),
+    private: bool = typer.Option(True, "--private/--public", help="非公開(既定)か公開か"),
+) -> None:
+    """ハンドル一覧からXネイティブのリストを作成し、解決できたアカウントを一括追加する。"""
+    from . import lists as lists_mod
+
+    handles = accounts.replace("\n", ",").split(",")
+    if file:
+        with open(file, encoding="utf-8") as fh:
+            handles += fh.read().splitlines()
+    result = lists_mod.create_list_from_handles(
+        _x(), name, handles, description=description, private=private
+    )
+    typer.echo(f"作成: {result['name']} → {result['url']}")
+    added = ", ".join("@" + h for h in result["added"]) or "(なし)"
+    typer.echo(f"追加 {len(result['added'])}件: {added}")
+    if result["skipped"]:
+        typer.echo(f"スキップ {len(result['skipped'])}件:")
+        for sk in result["skipped"]:
+            typer.echo(f"  @{sk['handle']}: {sk['reason']}")
+
+
 @app.command("style-set")
 def style_set(text: str) -> None:
     """スタイルガイドを設定する。"""

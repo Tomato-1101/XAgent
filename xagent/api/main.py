@@ -22,6 +22,7 @@ from .routes import (
     analytics,
     compose,
     drafts,
+    lists,
     media,
     monitor,
     posts,
@@ -95,6 +96,7 @@ app.include_router(profiles.router)
 app.include_router(schedule.router)
 app.include_router(media.router)
 app.include_router(analytics.router)
+app.include_router(lists.router)
 
 # 添付画像/動画のプレビュー配信(ローカル)。アップロードAPIは /media/upload、配信は /media/files。
 app.mount("/media/files", StaticFiles(directory=media_dir()), name="media-files")

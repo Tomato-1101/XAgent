@@ -57,7 +57,7 @@ class FakeXClient:
     """投稿を記録し、連番IDを返す。読み取りは事前セットしたツイートを返す。"""
 
     def __init__(self, mentions=None, timelines=None, users=None, full_tweets=None,
-                 searches=None, following=None, tweets=None):
+                 searches=None, following=None, tweets=None, lists=None, list_members=None):
         self.posted = []
         self.retweeted = []
         self._mentions = mentions or []
@@ -67,6 +67,10 @@ class FakeXClient:
         self._searches = searches or {}        # query -> list[dict]
         self._following = following or []      # list[{id, username}]
         self._tweets = tweets or {}            # tweet_id -> {id, text, author_id, author_handle}
+        self._lists = list(lists or [])        # 所有リスト list[dict]
+        self._list_members = list_members or {}  # list_id -> list[member dict]
+        self.list_calls = []                   # リスト書込の記録(検証用)
+        self._list_counter = 5000
         self._counter = 1000
 
     def _next_id(self):
@@ -125,6 +129,36 @@ class FakeXClient:
 
     def get_tweet(self, tweet_id):
         return self._tweets.get(str(tweet_id))
+
+    # --- リスト ---
+    def create_list(self, name, description=None, private=True):
+        self._list_counter += 1
+        lid = str(self._list_counter)
+        self.list_calls.append(("create_list", name, description, private))
+        self._lists.append(
+            {"id": lid, "name": name, "description": description or "",
+             "private": private, "member_count": 0}
+        )
+        self._list_members.setdefault(lid, [])
+        return lid
+
+    def update_list(self, list_id, name=None, description=None, private=None):
+        self.list_calls.append(("update_list", str(list_id), name, description, private))
+
+    def delete_list(self, list_id):
+        self.list_calls.append(("delete_list", str(list_id)))
+
+    def add_list_member(self, list_id, user_id):
+        self.list_calls.append(("add_list_member", str(list_id), str(user_id)))
+
+    def remove_list_member(self, list_id, user_id):
+        self.list_calls.append(("remove_list_member", str(list_id), str(user_id)))
+
+    def get_owned_lists(self, max_total=100):
+        return list(self._lists)[:max_total]
+
+    def get_list_members(self, list_id, max_total=100):
+        return list(self._list_members.get(str(list_id), []))[:max_total]
 
 
 @pytest.fixture
