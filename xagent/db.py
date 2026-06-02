@@ -62,10 +62,15 @@ def _migrate(engine) -> None:
 
 
 def init_db() -> None:
-    """テーブルを作成(なければ)し、列追加マイグレーションを適用する。"""
+    """テーブルを作成(なければ)し、列追加マイグレーションと初期シードを適用する。"""
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
     _migrate(engine)
+    # buzz-playbook由来の「型」を初期投入(冪等)。新規DB/既存DBどちらでも安全。
+    from .templates import seed_builtin_templates
+
+    with Session(engine) as session:
+        seed_builtin_templates(session)
 
 
 @contextmanager

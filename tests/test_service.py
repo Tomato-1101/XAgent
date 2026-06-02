@@ -240,3 +240,42 @@ def test_cannot_cancel_posted(session, fake_formatter, fake_x):
     assert d.status == DraftStatus.POSTED
     with pytest.raises(PolicyViolation):
         service.cancel_draft(session, d)
+
+
+# --- 「型」(PromptTemplate)の適用 -----------------------------------------
+
+from xagent import templates as templates_mod  # noqa: E402
+from xagent.models import TemplateKind          # noqa: E402
+
+
+def test_post_draft_injects_selected_template(session, fake_formatter):
+    t = templates_mod.create_template(session, "型X", TemplateKind.POST, "型本文X")
+    service.create_post_draft(session, fake_formatter, "メモ", template_id=t.id)
+    assert fake_formatter.playbooks[-1] == "型本文X"   # 選んだ型がformatterに渡る
+
+
+def test_post_draft_no_template_means_empty_playbook(session, fake_formatter):
+    service.create_post_draft(session, fake_formatter, "メモ")
+    assert fake_formatter.playbooks[-1] == ""
+
+
+def test_post_draft_auto_template_lets_ai_choose(session, fake_formatter):
+    templates_mod.create_template(session, "型A", TemplateKind.POST, "本文A")
+    b = templates_mod.create_template(session, "型B", TemplateKind.POST, "本文B")
+    fake_formatter.complete_return = str(b.id)         # AIが型Bを選ぶ
+    service.create_post_draft(session, fake_formatter, "メモ", auto_template=True)
+    assert fake_formatter.playbooks[-1] == "本文B"
+
+
+def test_monitor_reply_uses_active_reply_template(session, fake_formatter):
+    templates_mod.create_template(session, "リプ型", TemplateKind.REPLY, "リプ本文", active=True)
+    service.create_reply_draft(session, fake_formatter, "555", "元の投稿", "someone")
+    assert fake_formatter.playbooks[-1] == "リプ本文"   # active reply型が自動適用
+
+
+def test_reply_command_injects_template(session, fake_formatter):
+    t = templates_mod.create_template(session, "リプ型C", TemplateKind.REPLY, "コマンドリプ本文")
+    service.create_reply_command_draft(
+        session, fake_formatter, "555", "自分のコメント", template_id=t.id
+    )
+    assert fake_formatter.playbooks[-1] == "コマンドリプ本文"

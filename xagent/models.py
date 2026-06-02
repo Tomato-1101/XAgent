@@ -99,6 +99,30 @@ class StyleProfile(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow)
 
 
+class TemplateKind(str, Enum):
+    POST = "post"      # 通常投稿の型(バズの型A〜P/掴み)
+    REPLY = "reply"    # 絡みリプの型(R1〜R6)
+    QUOTE = "quote"    # 引用RTの型
+
+
+class PromptTemplate(SQLModel, table=True):
+    """投稿/リプ生成に使う「型」。本文(=LLMへ渡す指示文)を名前付き・カテゴリ別に複数保持する。
+
+    Composeで選択(または「AIに任せる」でAIが自動選択)し、整形プロンプトに注入する。
+    active はカテゴリ(kind)ごとに1つ=monitorの自動リプ/引用で使う既定の型。
+    builtin はシード投入(buzz-playbook由来)の目印で、再シード時の重複投入を防ぐ。
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = ""
+    kind: TemplateKind = TemplateKind.POST
+    body: str = ""               # 型の中身(LLMへ「この型・狙いで書け」と渡す指示文)
+    active: bool = False         # 同kindで1つだけ。monitorの自動生成が使う既定
+    builtin: bool = False        # シード投入(buzz-playbook)の目印
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
 class PastPost(SQLModel, table=True):
     """学習用に取得した投稿(自分/他人)。アカウントごとに保持し特徴抽出の素材にする。"""
 

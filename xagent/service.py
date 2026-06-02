@@ -25,9 +25,10 @@ from .guards import (
     ensure_post_authorized,
 )
 from .media import validate_media_set
-from .models import CostKind, Draft, DraftKind, DraftStatus
+from .models import CostKind, Draft, DraftKind, DraftStatus, TemplateKind
 from .profiles import example_posts_for_account, get_profile_by_handle
 from .style import active_style_guide
+from . import templates as templates_mod
 from .text import split_into_thread
 from .x_client import XClient
 
@@ -40,6 +41,21 @@ def _emulate_inputs(session: Session, emulate_handle: str | None) -> tuple[str, 
     if prof is None:
         return "", None
     return prof.profile_text or "", example_posts_for_account(session, emulate_handle)
+
+
+def _playbook_for(
+    session: Session,
+    formatter: Formatter,
+    kind: TemplateKind,
+    source_text: str,
+    template_id: int | None,
+    auto_template: bool,
+) -> str:
+    """使う「型」の本文を返す。auto_template時はAIが候補から最適な型を選ぶ(「AIに任せる」)。"""
+    if auto_template:
+        candidates = templates_mod.list_templates(session, kind)
+        template_id = templates_mod.choose_template(formatter.complete, candidates, source_text)
+    return templates_mod.resolve_body(session, template_id)
 
 
 def _utcnow() -> datetime:
@@ -90,11 +106,14 @@ def create_post_draft(
     media_paths: list[str] | None = None,
     emulate_handle: str | None = None,
     raw: bool = False,
+    template_id: int | None = None,
+    auto_template: bool = False,
 ) -> Draft:
     """テキストを整形して未承認の下書きを作る。
 
     常時適用は手入力のスタイルガイド(active_style_guide)のみ。学習データは自動注入しない。
     emulate_handle を指定したときだけ、そのアカウントの特徴・代表投稿を整形に乗せる。
+    template_id/auto_template で「型」を適用(auto_template=AIが最適な型を自動選択)。
     raw=True なら整形(LLM)を行わず、入力をそのまま本文にする(スレッド分割のみ)。
     """
     validate_media_set(media_paths)
@@ -103,9 +122,13 @@ def create_post_draft(
     else:
         sg = style_guide if style_guide is not None else active_style_guide(session)
         emulate_text, emulate_examples = _emulate_inputs(session, emulate_handle)
+        playbook = _playbook_for(
+            session, formatter, TemplateKind.POST, source_text, template_id, auto_template
+        )
         res = formatter.format_post(
             source_text, sg, allow_long=allow_long,
             emulate_profile_text=emulate_text, emulate_examples=emulate_examples,
+            playbook=playbook,
         )
         segments = res.segments
     draft = Draft(
@@ -127,14 +150,20 @@ def create_post_variations(
     allow_long: bool = False,
     emulate_handle: str | None = None,
     media_paths: list[str] | None = None,
+    template_id: int | None = None,
+    auto_template: bool = False,
 ) -> list[Draft]:
     """1つのメモから言い回し違いのn案を未承認下書きとして作る(同じメディアを各案に付与)。"""
     validate_media_set(media_paths)
     sg = style_guide if style_guide is not None else active_style_guide(session)
     emulate_text, emulate_examples = _emulate_inputs(session, emulate_handle)
+    playbook = _playbook_for(
+        session, formatter, TemplateKind.POST, source_text, template_id, auto_template
+    )
     results = formatter.format_variations(
         source_text, n=n, style_guide=sg, allow_long=allow_long,
         emulate_profile_text=emulate_text, emulate_examples=emulate_examples,
+        playbook=playbook,
     )
     drafts: list[Draft] = []
     for res in results:
@@ -163,7 +192,8 @@ def create_reply_draft(
     target_handle: str | None = None,
 ) -> Draft:
     res = formatter.generate_reply(
-        target_text, target_handle or "", active_style_guide(session)
+        target_text, target_handle or "", active_style_guide(session),
+        playbook=templates_mod.active_body(session, TemplateKind.REPLY),
     )
     draft = Draft(
         kind=DraftKind.REPLY,
@@ -184,7 +214,8 @@ def create_quote_draft(
     target_handle: str | None = None,
 ) -> Draft:
     res = formatter.generate_quote(
-        target_text, target_handle or "", active_style_guide(session)
+        target_text, target_handle or "", active_style_guide(session),
+        playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
     )
     draft = Draft(
         kind=DraftKind.QUOTE,
@@ -205,6 +236,7 @@ def _compose_command_segments(
     allow_long: bool,
     style_guide: str | None,
     emulate_handle: str | None,
+    playbook: str = "",
 ) -> list[str]:
     """指令フロー(quote/reply)で、自分のコメントを raw or 整形して本文セグメントにする共通処理。"""
     if raw:
@@ -214,6 +246,7 @@ def _compose_command_segments(
     res = formatter.format_post(
         comment, sg, allow_long=allow_long,
         emulate_profile_text=emulate_text, emulate_examples=emulate_examples,
+        playbook=playbook,
     )
     return res.segments
 
@@ -230,6 +263,8 @@ def create_quote_command_draft(
     allow_long: bool = False,
     emulate_handle: str | None = None,
     media_paths: list[str] | None = None,
+    template_id: int | None = None,
+    auto_template: bool = False,
 ) -> Draft:
     """指令フロー用: ユーザー/エージェント自身のコメントを引用RTの本文として下書き化する。
 
@@ -238,8 +273,15 @@ def create_quote_command_draft(
     target_text には引用元の本文(取得できれば)を表示用に保持する。
     """
     validate_media_set(media_paths)
+    playbook = (
+        ""
+        if raw
+        else _playbook_for(
+            session, formatter, TemplateKind.QUOTE, comment, template_id, auto_template
+        )
+    )
     segments = _compose_command_segments(
-        session, formatter, comment, raw, allow_long, style_guide, emulate_handle
+        session, formatter, comment, raw, allow_long, style_guide, emulate_handle, playbook
     )
     draft = Draft(
         kind=DraftKind.QUOTE,
@@ -266,6 +308,8 @@ def create_reply_command_draft(
     allow_long: bool = False,
     emulate_handle: str | None = None,
     media_paths: list[str] | None = None,
+    template_id: int | None = None,
+    auto_template: bool = False,
 ) -> Draft:
     """指令フロー用: 指定ツイートに対し、自分(ユーザー/エージェント)が書いた文でリプライする下書き。
 
@@ -274,8 +318,15 @@ def create_reply_command_draft(
     target_text には返信先の本文(取得できれば)を表示用に保持する。
     """
     validate_media_set(media_paths)
+    playbook = (
+        ""
+        if raw
+        else _playbook_for(
+            session, formatter, TemplateKind.REPLY, comment, template_id, auto_template
+        )
+    )
     segments = _compose_command_segments(
-        session, formatter, comment, raw, allow_long, style_guide, emulate_handle
+        session, formatter, comment, raw, allow_long, style_guide, emulate_handle, playbook
     )
     draft = Draft(
         kind=DraftKind.REPLY,

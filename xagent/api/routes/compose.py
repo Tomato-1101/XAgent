@@ -100,6 +100,8 @@ def compose(
             media_paths=req.media_paths,
             emulate_handle=req.emulate_handle,
             raw=req.raw,
+            template_id=req.template_id,
+            auto_template=req.auto_template,
         )
     except PolicyViolation as e:
         raise HTTPException(400, str(e))
@@ -128,6 +130,8 @@ def compose_variations(
                     media_paths=req.media_paths,
                     emulate_handle=req.emulate_handle,
                     raw=True,
+                    template_id=req.template_id,
+                    auto_template=req.auto_template,
                 )
             ]
         else:
@@ -140,6 +144,8 @@ def compose_variations(
                 allow_long=req.allow_long,
                 emulate_handle=req.emulate_handle,
                 media_paths=req.media_paths,
+                template_id=req.template_id,
+                auto_template=req.auto_template,
             )
     except PolicyViolation as e:
         raise HTTPException(400, str(e))
@@ -201,6 +207,8 @@ def command(
                 allow_long=req.allow_long,
                 emulate_handle=req.emulate_handle,
                 media_paths=req.media_paths,
+                template_id=req.template_id,
+                auto_template=req.auto_template,
             )
         else:
             draft = service.create_post_draft(
@@ -212,6 +220,8 @@ def command(
                 media_paths=req.media_paths,
                 emulate_handle=req.emulate_handle,
                 raw=req.raw,
+                template_id=req.template_id,
+                auto_template=req.auto_template,
             )
     except PolicyViolation as e:
         raise HTTPException(400, str(e))

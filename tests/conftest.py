@@ -24,31 +24,47 @@ def session():
 
 
 class FakeFormatter:
-    """LLMを呼ばず、入力をそのまま/定型で返す整形器。"""
+    """LLMを呼ばず、入力をそのまま/定型で返す整形器。
+
+    playbooks に各整形呼び出しで渡された型(playbook)を記録し、テストで注入を検証できる。
+    complete_return をセットすると complete() の戻り値を差し替えられる(型のAI選択テスト用)。
+    """
+
+    def __init__(self):
+        self.playbooks = []          # 整形に渡された playbook を順に記録
+        self.complete_return = None  # set すると complete() がこれを返す
 
     def format_post(
         self, source_text, style_guide="", allow_long=False,
-        emulate_profile_text="", emulate_examples=None,
+        emulate_profile_text="", emulate_examples=None, playbook="",
     ):
+        self.playbooks.append(playbook)
         prefix = "[真似]" if emulate_profile_text else ""
         return FormatResult([prefix + source_text.strip()], folded=False, weighted_total=0)
 
     def format_variations(
         self, source_text, n=3, style_guide="", allow_long=False,
-        emulate_profile_text="", emulate_examples=None,
+        emulate_profile_text="", emulate_examples=None, playbook="",
     ):
+        self.playbooks.append(playbook)
         return [
             FormatResult([f"{source_text.strip()} (案{i + 1})"], folded=False)
             for i in range(max(1, min(n, 5)))
         ]
 
-    def generate_reply(self, target_text, target_handle="", style_guide="", examples=None):
+    def generate_reply(self, target_text, target_handle="", style_guide="", examples=None,
+                       playbook=""):
+        self.playbooks.append(playbook)
         return FormatResult([f"返信案: {target_text[:10]}"], folded=False)
 
-    def generate_quote(self, target_text, target_handle="", style_guide="", examples=None):
+    def generate_quote(self, target_text, target_handle="", style_guide="", examples=None,
+                       playbook=""):
+        self.playbooks.append(playbook)
         return FormatResult([f"引用案: {target_text[:10]}"], folded=False)
 
     def complete(self, system, user):
+        if self.complete_return is not None:
+            return self.complete_return
         # プロファイル抽出のフェイク: 最低限のJSONを返す
         return '{"tone":"短い断定","themes":["X運用"],"summary":"短く言い切る。"}'
 

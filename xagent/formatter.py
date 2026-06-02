@@ -38,6 +38,17 @@ def _style_block(style_guide: str, examples: list[str] | None) -> str:
     return "\n\n".join(parts)
 
 
+def _guide_with_playbook(playbook: str, style_guide: str, examples: list[str] | None) -> str:
+    """型(playbook)＋口調ガイド を1ブロックにまとめる(リプ/引用の整形用)。"""
+    parts = []
+    if playbook.strip():
+        parts.append(f"## 使う型(この型・狙いに沿って書く)\n{playbook.strip()}")
+    sb = _style_block(style_guide, examples)
+    if sb:
+        parts.append(sb)
+    return "\n\n".join(parts)
+
+
 class Formatter:
     def __init__(
         self, settings: Settings | None = None, complete: CompleteFn | None = None
@@ -80,6 +91,7 @@ class Formatter:
         allow_long: bool,
         emulate_profile_text: str,
         emulate_examples: list[str] | None,
+        playbook: str = "",
     ) -> str:
         length_rule = (
             "1ツイートは必ず140字(日本語の字数)以内に収める。改行・記号・スペースも字数に数える。"
@@ -88,6 +100,8 @@ class Formatter:
             else "フックとして長文も可。冒頭で続きを読みたくなる書き出しにする。"
         )
         blocks = []
+        if playbook.strip():
+            blocks.append(f"## 使う型(このフォーマット・狙いに沿って書く)\n{playbook.strip()}")
         if style_guide.strip():
             blocks.append(f"## 口調・スタイルガイド(常時適用)\n{style_guide.strip()}")
         if emulate_profile_text.strip():
@@ -117,8 +131,11 @@ class Formatter:
         allow_long: bool = False,
         emulate_profile_text: str = "",
         emulate_examples: list[str] | None = None,
+        playbook: str = "",
     ) -> FormatResult:
-        system = self._post_system(style_guide, allow_long, emulate_profile_text, emulate_examples)
+        system = self._post_system(
+            style_guide, allow_long, emulate_profile_text, emulate_examples, playbook
+        )
         text = self._complete(system, source_text).strip()
         segments = [text] if allow_long else split_into_thread(text)
         return FormatResult(
@@ -135,10 +152,13 @@ class Formatter:
         allow_long: bool = False,
         emulate_profile_text: str = "",
         emulate_examples: list[str] | None = None,
+        playbook: str = "",
     ) -> list[FormatResult]:
         """1つのメモから言い回し違いをn案生成する。下書きを多く出すため。"""
         n = max(1, min(n, 5))
-        base = self._post_system(style_guide, allow_long, emulate_profile_text, emulate_examples)
+        base = self._post_system(
+            style_guide, allow_long, emulate_profile_text, emulate_examples, playbook
+        )
         system = (
             base
             + f"\n\n## 追加指示\n上記メモから、切り口・書き出しの異なる案を{n}個作る。"
@@ -163,6 +183,7 @@ class Formatter:
         target_handle: str = "",
         style_guide: str = "",
         examples: list[str] | None = None,
+        playbook: str = "",
     ) -> FormatResult:
         system = f"""あなたは日本語Xアカウントの運用アシスタント。相手の投稿に対する自然で価値あるリプライ案を1つ作る。
 
@@ -171,7 +192,7 @@ class Formatter:
 - 媚びすぎ・定型の褒めだけは避け、会話が続く一言にする。本人の口調を保つ。
 - 出力はリプライ本文のみ。
 
-{_style_block(style_guide, examples)}""".strip()
+{_guide_with_playbook(playbook, style_guide, examples)}""".strip()
         user = f"相手(@{target_handle})の投稿:\n{target_text}"
         text = self._complete(system, user).strip()
         return FormatResult([text], exceeds_fold(text), weighted_length(text))
@@ -183,6 +204,7 @@ class Formatter:
         target_handle: str = "",
         style_guide: str = "",
         examples: list[str] | None = None,
+        playbook: str = "",
     ) -> FormatResult:
         system = f"""あなたは日本語Xアカウントの運用アシスタント。相手の投稿を引用RTする際の本文案を1つ作る。
 
@@ -191,7 +213,7 @@ class Formatter:
 - 単なる感想で終わらせず、フォロワーに学びがある切り口にする。本人の口調を保つ。
 - 出力は引用本文のみ。
 
-{_style_block(style_guide, examples)}""".strip()
+{_guide_with_playbook(playbook, style_guide, examples)}""".strip()
         user = f"引用する相手(@{target_handle})の投稿:\n{target_text}"
         text = self._complete(system, user).strip()
         return FormatResult([text], exceeds_fold(text), weighted_length(text))

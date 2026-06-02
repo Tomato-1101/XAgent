@@ -11,10 +11,12 @@ import type {
   MediaItem,
   MonitorSettings,
   PreviewResponse,
+  PromptTemplate,
   RecentPost,
   RecommendedTimes,
   SummaryResponse,
   Target,
+  TemplateKind,
   XList,
   XListMember,
 } from "./types";
@@ -62,11 +64,16 @@ export const api = {
     emulate_handle?: string,
     media_paths: string[] = [],
     style_guide?: string,
-    raw = false
+    raw = false,
+    template_id?: number | null,
+    auto_template = false
   ) =>
     req<Draft>("/compose", {
       method: "POST",
-      body: JSON.stringify({ text, allow_long, emulate_handle, media_paths, style_guide, raw }),
+      body: JSON.stringify({
+        text, allow_long, emulate_handle, media_paths, style_guide, raw,
+        template_id, auto_template,
+      }),
     }),
 
   composeVariations: (
@@ -76,7 +83,9 @@ export const api = {
     emulate_handle?: string,
     media_paths: string[] = [],
     style_guide?: string,
-    raw = false
+    raw = false,
+    template_id?: number | null,
+    auto_template = false
   ) =>
     req<Draft[]>("/compose/variations", {
       method: "POST",
@@ -88,6 +97,8 @@ export const api = {
         media_paths,
         style_guide,
         raw,
+        template_id,
+        auto_template,
       }),
     }),
 
@@ -109,6 +120,8 @@ export const api = {
     emulate_handle?: string;
     media_paths?: string[];
     style_guide?: string;
+    template_id?: number | null;
+    auto_template?: boolean;
   }) => req<Draft>("/compose/command", { method: "POST", body: JSON.stringify(payload) }),
 
   uploadMedia: async (file: File): Promise<MediaItem> => {
@@ -228,4 +241,17 @@ export const api = {
     req<void>(`/lists/${id}/members`, { method: "POST", body: JSON.stringify(body) }),
   removeListMember: (id: string, userId: string) =>
     req<void>(`/lists/${id}/members/${userId}`, { method: "DELETE" }),
+
+  // 投稿/リプの「型」: 複数保存し、Composeで選択 or「AIに任せる」で使う
+  templates: (kind?: TemplateKind) =>
+    req<PromptTemplate[]>(`/templates${kind ? `?kind=${kind}` : ""}`),
+  createTemplate: (payload: { name: string; kind: TemplateKind; body: string; active?: boolean }) =>
+    req<PromptTemplate>("/templates", { method: "POST", body: JSON.stringify(payload) }),
+  updateTemplate: (
+    id: number,
+    patch: { name?: string; body?: string; kind?: TemplateKind; active?: boolean }
+  ) => req<PromptTemplate>(`/templates/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  activateTemplate: (id: number) =>
+    req<PromptTemplate>(`/templates/${id}/activate`, { method: "POST" }),
+  deleteTemplate: (id: number) => req<void>(`/templates/${id}`, { method: "DELETE" }),
 };

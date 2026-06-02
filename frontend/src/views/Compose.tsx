@@ -5,7 +5,22 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DraftCard } from "../components/DraftCard";
 import { AgentHint } from "../components/AgentHint";
 import type { AgentPhrase } from "../components/AgentHint";
-import type { AccountProfile, Draft, Interpreted, MediaItem, PreviewResponse } from "../types";
+import type {
+  AccountProfile,
+  Draft,
+  Interpreted,
+  MediaItem,
+  PreviewResponse,
+  PromptTemplate,
+  TemplateKind,
+} from "../types";
+
+// 型セレクタの選択値("auto"=AIに任せる / "none"=型なし / 数字=その型ID)を API パラメータに写像。
+function templateParams(choice: string): { template_id?: number | null; auto_template: boolean } {
+  if (choice === "auto") return { auto_template: true };
+  if (choice === "none" || !choice) return { auto_template: false, template_id: null };
+  return { auto_template: false, template_id: Number(choice) };
+}
 
 const MAX_IMAGES = 4;
 
@@ -46,12 +61,18 @@ export default function Compose() {
   const [cmdBody, setCmdBody] = useState("");
   const [created, setCreated] = useState<Draft[]>([]);
   const [profiles, setProfiles] = useState<AccountProfile[]>([]);
+  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
+  const [templateChoice, setTemplateChoice] = useState<string>("auto"); // 既定=AIに任せる
+  const [cmdTemplateChoice, setCmdTemplateChoice] = useState<string>("auto");
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
+    api.templates().then(setTemplates).catch(() => setTemplates([]));
   }, []);
+
+  const templatesByKind = (kind: TemplateKind) => templates.filter((t) => t.kind === kind);
 
   useEffect(() => {
     if (!text.trim()) {
@@ -123,6 +144,7 @@ export default function Compose() {
         setCmdAction(r.target_tweet_id ? r.action : "post");
         setCmdRaw(r.raw || raw);
         setCmdBody(r.body);
+        setCmdTemplateChoice("auto");
       } catch (e) {
         setError(String(e));
       } finally {
@@ -140,11 +162,16 @@ export default function Compose() {
     try {
       const handle = emulate || undefined;
       const paths = media.map((m) => m.path);
+      const { template_id, auto_template } = templateParams(templateChoice);
       if (!raw && nVariations > 1) {
-        const ds = await api.composeVariations(text, nVariations, allowLong, handle, paths);
+        const ds = await api.composeVariations(
+          text, nVariations, allowLong, handle, paths, undefined, false, template_id, auto_template
+        );
         setCreated(ds);
       } else {
-        const d = await api.compose(text, allowLong, handle, paths, undefined, raw);
+        const d = await api.compose(
+          text, allowLong, handle, paths, undefined, raw, template_id, auto_template
+        );
         setCreated([d]);
       }
       resetInput();
@@ -162,6 +189,7 @@ export default function Compose() {
     try {
       const handle = emulate || undefined;
       const paths = media.map((m) => m.path);
+      const { template_id, auto_template } = templateParams(cmdTemplateChoice);
       const d = await api.command({
         action: cmdAction,
         text: cmdBody,
@@ -171,6 +199,8 @@ export default function Compose() {
         allow_long: allowLong,
         emulate_handle: handle,
         media_paths: paths,
+        template_id,
+        auto_template,
       });
       setCreated([d]);
       setInterp(null);
@@ -298,6 +328,37 @@ export default function Compose() {
               <option value={4}>4案</option>
             </select>
           </label>
+        </div>
+
+        {/* 使う型: 既定は「AIに任せる」。整形なし(raw)では型は無関係なので無効化。 */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <label className="flex-1 space-y-1 text-sm text-zinc-400">
+            <span>使う型（投稿の型）</span>
+            <select
+              value={templateChoice}
+              onChange={(e) => setTemplateChoice(e.target.value)}
+              disabled={raw}
+              className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-sky-500/50 disabled:opacity-50"
+            >
+              <option value="auto">AIに任せる（最適な型を自動選択）</option>
+              <option value="none">型なし</option>
+              {templatesByKind("post").map((t) => (
+                <option key={t.id} value={String(t.id)}>
+                  {t.name}
+                  {t.active ? "（既定）" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setTemplateChoice("auto")}
+            disabled={raw || templateChoice === "auto"}
+            title="型の選択をAIに任せます（最適な型を自動選択）"
+          >
+            AIにおまかせ
+          </Button>
         </div>
 
         <div className="flex flex-col gap-2 border-t border-zinc-800 pt-3">
@@ -430,6 +491,28 @@ export default function Compose() {
                 onChange={(e) => setCmdRaw(e.target.checked)}
               />
               整形せずそのまま投稿する
+            </label>
+
+            {/* 使う型: action に応じて post型 / quote型 を出す。整形なしでは無効。 */}
+            <label className="block space-y-1">
+              <span className="text-xs text-zinc-500">
+                使う型（{cmdAction === "quote" ? "引用RT" : "投稿"}）
+              </span>
+              <select
+                value={cmdTemplateChoice}
+                onChange={(e) => setCmdTemplateChoice(e.target.value)}
+                disabled={cmdRaw}
+                className="h-9 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-sky-500/50 disabled:opacity-50"
+              >
+                <option value="auto">AIに任せる（最適な型を自動選択）</option>
+                <option value="none">型なし</option>
+                {templatesByKind(cmdAction === "quote" ? "quote" : "post").map((t) => (
+                  <option key={t.id} value={String(t.id)}>
+                    {t.name}
+                    {t.active ? "（既定）" : ""}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
         )}

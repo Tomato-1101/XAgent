@@ -174,3 +174,14 @@ export interface ListCreateResult {
   added: string[];
   skipped: { handle: string; reason: string }[];
 }
+
+export type TemplateKind = "post" | "reply" | "quote";
+
+export interface PromptTemplate {
+  id: number;
+  name: string;
+  kind: TemplateKind;
+  body: string;
+  active: boolean;
+  builtin: boolean;
+}

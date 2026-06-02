@@ -7,7 +7,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from ..models import Draft, DraftKind, DraftStatus, TargetKind
+from ..models import Draft, DraftKind, DraftStatus, TargetKind, TemplateKind
 
 
 class DraftRead(BaseModel):
@@ -56,6 +56,8 @@ class ComposeRequest(BaseModel):
     emulate_handle: str | None = None  # 真似るアカウント(学習済みのみ有効)
     n_variations: int = 1              # 1なら単発、2以上で言い回し違いをN案
     raw: bool = False                  # Trueなら整形(LLM)せず入力をそのまま投稿
+    template_id: int | None = None     # 使う「型」。Noneで型なし
+    auto_template: bool = False        # TrueでAIが最適な型を自動選択(「AIに任せる」)
 
 
 class InterpretRequest(BaseModel):
@@ -86,6 +88,31 @@ class CommandRequest(BaseModel):
     emulate_handle: str | None = None
     media_paths: list[str] = []
     style_guide: str | None = None
+    template_id: int | None = None     # 使う「型」。Noneで型なし
+    auto_template: bool = False        # TrueでAIが最適な型を自動選択(「AIに任せる」)
+
+
+class TemplateRead(BaseModel):
+    id: int | None
+    name: str
+    kind: TemplateKind
+    body: str
+    active: bool
+    builtin: bool
+
+
+class TemplateCreate(BaseModel):
+    name: str
+    kind: TemplateKind = TemplateKind.POST
+    body: str = ""
+    active: bool = False
+
+
+class TemplateUpdate(BaseModel):
+    name: str | None = None
+    body: str | None = None
+    kind: TemplateKind | None = None
+    active: bool | None = None
 
 
 class ProfileLearnRequest(BaseModel):
