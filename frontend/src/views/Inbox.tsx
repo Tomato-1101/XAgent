@@ -139,7 +139,19 @@ export default function Inbox({ me }: { me: Me | null }) {
                 <Button size="sm" variant="danger" onClick={() => setPending(d)}>
                   承認して送信
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => act(() => api.approve(d.id))}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    act(async () => {
+                      await api.approve(d.id);
+                      toast({
+                        tone: "success",
+                        message: "承認しました。Queueの「承認済み」タブで予約・投稿できます。",
+                      });
+                    })
+                  }
+                >
                   承認のみ
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>

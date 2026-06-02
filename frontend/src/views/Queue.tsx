@@ -86,8 +86,9 @@ export default function Queue({ me }: { me: Me | null }) {
   }
 
   function reload() {
-    // 予約タブは投稿・リポスト両方を時刻の早い順で。他タブは投稿(post)のみ。
-    const kind = status === "queued" ? undefined : "post";
+    // 下書きタブのみ自分の投稿(post)に限定(返信/引用の下書きはInbox側で扱う)。
+    // 承認済み/予約/投稿済み/取消は全種を表示し、承認後の返信もここで予約・投稿できるようにする。
+    const kind = status === "draft" ? "post" : undefined;
     api
       .listDrafts(status, kind)
       .then((rows) => {
