@@ -39,6 +39,7 @@ export interface Target {
   kind: string;
   handle: string | null;
   user_id: string | null;
+  list_id: string | null;
   keyword: string | null;
   active: boolean;
   notes: string | null;

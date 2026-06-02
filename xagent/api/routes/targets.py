@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
-from ...models import EngageTarget
+from ...models import EngageTarget, TargetKind
 from ...x_client import XClient, XClientError
 from ..deps import db_session, get_x_client, require_api_token
 from ..schemas import TargetRequest
@@ -20,6 +20,19 @@ def list_targets(session: Session = Depends(db_session)) -> list[EngageTarget]:
 
 @router.post("", response_model=EngageTarget)
 def add_target(req: TargetRequest, session: Session = Depends(db_session)) -> EngageTarget:
+    # kind=LIST: Xリスト連携。個人ではなくリストを丸ごと対象にする。巡回時に現メンバーへ
+    # 展開するため、登録時はlist_id+リスト名(handle)だけ保持する(user_id解決不要)。
+    if req.kind == TargetKind.LIST:
+        if not req.list_id:
+            raise HTTPException(400, "リスト対象にはlist_idが必要です。")
+        target = EngageTarget(
+            kind=TargetKind.LIST, handle=req.handle, list_id=req.list_id, notes=req.notes
+        )
+        session.add(target)
+        session.commit()
+        session.refresh(target)
+        return target
+
     handle = req.handle.lstrip("@")
     user_id = None
     if req.resolve_user_id:

@@ -192,6 +192,7 @@ class StyleRequest(BaseModel):
 class TargetRequest(BaseModel):
     handle: str
     kind: TargetKind = TargetKind.MANUAL
+    list_id: str | None = None    # kind=LIST時のXリストID(handleはリスト名)
     keyword: str | None = None
     notes: str | None = None
     resolve_user_id: bool = True  # X APIでuser_idを解決するか

@@ -43,6 +43,9 @@ _ADDED_COLUMNS = {
     "monitorsettings": [
         ("max_drafts_per_run", "INTEGER", "DEFAULT 10"),
     ],
+    "engagetarget": [
+        ("list_id", "VARCHAR", ""),
+    ],
 }
 
 

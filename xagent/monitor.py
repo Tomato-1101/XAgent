@@ -14,6 +14,7 @@ from .service import create_quote_draft, create_reply_draft
 from .x_client import XClient
 
 FOLLOWING_MAX_ACCOUNTS = 20  # フォロー中巡回の1ティック上限(コスト抑制)
+LIST_MEMBERS_MAX = 500       # リスト連携で展開するメンバー数の上限
 
 
 def get_monitor_settings(session: Session) -> MonitorSettings:
@@ -100,12 +101,12 @@ def poll_mentions(
 def poll_targets(
     session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
 ) -> int:
-    """手動リスト等(user_id付き・GENRE以外)の新規投稿→引用RT案。limit は全対象で共有。生成件数を返す。"""
+    """手動追加(MANUAL・user_id付き)の新規投稿→引用RT案。limit は全対象で共有。生成件数を返す。"""
     targets = session.exec(
         select(EngageTarget).where(
             EngageTarget.active == True,  # noqa: E712
             EngageTarget.user_id != None,  # noqa: E711
-            EngageTarget.kind != TargetKind.GENRE,
+            EngageTarget.kind == TargetKind.MANUAL,
         )
     ).all()
     created = 0
@@ -128,6 +129,51 @@ def poll_targets(
             cur.last_seen_id = new_max
             session.add(cur)
             session.commit()
+    return created
+
+
+def poll_lists(
+    session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
+) -> int:
+    """Xリスト連携(kind=LIST)→リストの現メンバーを毎回展開し各人の新規投稿→引用RT案。
+
+    メンバーは巡回ごとに get_list_members で取り直すため、Xリスト側の増減が自動で反映される
+    (=リスト更新が絡む相手に連携)。limit は全対象で共有。生成件数を返す。
+    """
+    lists = session.exec(
+        select(EngageTarget).where(
+            EngageTarget.active == True,  # noqa: E712
+            EngageTarget.kind == TargetKind.LIST,
+            EngageTarget.list_id != None,  # noqa: E711
+        )
+    ).all()
+    created = 0
+    for lt in lists:
+        if limit is not None and created >= limit:
+            break
+        members = x_client.get_list_members(lt.list_id, max_total=LIST_MEMBERS_MAX)
+        for m in members:
+            if limit is not None and created >= limit:
+                break
+            uid = m.get("id")
+            if not uid:
+                continue
+            remaining = None if limit is None else limit - created
+            cur = _get_cursor(session, f"target:{uid}")
+            tweets = _cap_oldest(
+                x_client.get_user_timeline(uid, since_id=cur.last_seen_id), remaining
+            )
+            for t in tweets:
+                create_quote_draft(
+                    session, formatter, t["id"], t.get("text", ""),
+                    target_handle=m.get("username"), target_created_at=t.get("created_at"),
+                )
+                created += 1
+            new_max = _max_id([t["id"] for t in tweets])
+            if new_max:
+                cur.last_seen_id = new_max
+                session.add(cur)
+                session.commit()
     return created
 
 
@@ -214,6 +260,10 @@ def run_once(
         budget -= replies
     if cfg.manual_targets_enabled and budget > 0:
         c = poll_targets(session, x_client, formatter, limit=budget)
+        quotes += c
+        budget -= c
+    if cfg.manual_targets_enabled and budget > 0:
+        c = poll_lists(session, x_client, formatter, limit=budget)
         quotes += c
         budget -= c
     if cfg.keyword_search_enabled and budget > 0:

@@ -65,6 +65,7 @@ class Draft(SQLModel, table=True):
 
 class TargetKind(str, Enum):
     MANUAL = "manual"        # 手動リスト(主)
+    LIST = "list"            # Xリスト連携(list_idのメンバーを毎回展開して巡回)
     GENRE = "genre"          # ジャンル/キーワード探索
     FOLLOWING = "following"  # フォロー中
 
@@ -74,8 +75,9 @@ class EngageTarget(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     kind: TargetKind = TargetKind.MANUAL
-    handle: str | None = None     # @なしのスクリーンネーム
+    handle: str | None = None     # @なしのスクリーンネーム。kind=LISTではリスト名(表示用)
     user_id: str | None = None    # X user id
+    list_id: str | None = None    # kind=LIST時のXリストID。巡回時に現在のメンバーへ毎回展開する
     keyword: str | None = None    # genre探索用
     active: bool = True
     notes: str | None = None

@@ -28,6 +28,55 @@ def test_poll_targets_creates_quote_drafts(session, fake_formatter):
     assert drafts[0].target_tweet_id == "202"
 
 
+def test_poll_lists_expands_members_to_quotes(session, fake_formatter):
+    """kind=LIST はリストの現メンバーへ展開し、各メンバーの新規投稿に引用RT案を作る。"""
+    session.add(EngageTarget(kind=TargetKind.LIST, handle="絡み候補A", list_id="L1", active=True))
+    session.commit()
+    fx = FakeXClient(
+        list_members={"L1": [{"id": "u9", "username": "famous"}, {"id": "u8", "username": "other"}]},
+        timelines={
+            "u9": [{"id": "202", "text": "メンバー1の投稿", "author_id": "u9"}],
+            "u8": [{"id": "303", "text": "メンバー2の投稿", "author_id": "u8"}],
+        },
+    )
+    n = monitor.poll_lists(session, fx, fake_formatter)
+    assert n == 2
+    drafts = session.exec(select(Draft).where(Draft.kind == DraftKind.QUOTE)).all()
+    assert {d.target_tweet_id for d in drafts} == {"202", "303"}
+    assert {d.target_handle for d in drafts} == {"famous", "other"}
+
+
+def test_poll_lists_reflects_membership_live(session, fake_formatter):
+    """リストのメンバーは巡回ごとに取り直すため、メンバー増減が自動で反映される(連携)。"""
+    session.add(EngageTarget(kind=TargetKind.LIST, handle="A", list_id="L1", active=True))
+    session.commit()
+    fx = FakeXClient(
+        list_members={"L1": [{"id": "u9", "username": "famous"}]},
+        timelines={
+            "u9": [{"id": "202", "text": "p", "author_id": "u9"}],
+            "u8": [{"id": "303", "text": "q", "author_id": "u8"}],
+        },
+    )
+    assert monitor.poll_lists(session, fx, fake_formatter) == 1  # 当初メンバーは1人(famous)
+    # リスト側にメンバーを追加 → 次の巡回で取り直すため新メンバーも自動で対象になる
+    fx._list_members["L1"].append({"id": "u8", "username": "other"})
+    monitor.poll_lists(session, fx, fake_formatter)
+    drafts = session.exec(select(Draft).where(Draft.kind == DraftKind.QUOTE)).all()
+    # 追加した other(u8) の投稿が新たに対象化されている(=リスト更新が連携)
+    assert "other" in {d.target_handle for d in drafts}
+
+
+def test_poll_targets_ignores_list_kind(session, fake_formatter):
+    """poll_targets は MANUAL 限定。LIST 対象は poll_targets では処理しない(二重生成防止)。"""
+    session.add(EngageTarget(kind=TargetKind.LIST, handle="A", list_id="L1", active=True))
+    session.commit()
+    fx = FakeXClient(
+        list_members={"L1": [{"id": "u9", "username": "famous"}]},
+        timelines={"u9": [{"id": "202", "text": "p", "author_id": "u9"}]},
+    )
+    assert monitor.poll_targets(session, fx, fake_formatter) == 0
+
+
 def test_run_once_summary(session, fake_formatter):
     session.add(EngageTarget(kind=TargetKind.MANUAL, handle="famous", user_id="u9", active=True))
     session.commit()

@@ -414,3 +414,21 @@ def test_posts_repost_blocked_423_then_override(client):
     r2 = client.post("/posts/1000/repost", json={"mode": "now", "text": "突破", "override": True})
     assert r2.status_code == 200
     assert "1000" in client.fake_x.retweeted
+
+
+def test_add_target_list_stores_list_id(client):
+    """リストを対象に追加: kind=list + list_id で登録され、user_id解決は走らない。"""
+    r = client.post("/targets", json={"kind": "list", "handle": "絡み候補A", "list_id": "L1"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "list"
+    assert body["list_id"] == "L1"
+    assert body["handle"] == "絡み候補A"
+    assert body["user_id"] is None
+    # 一覧に出る
+    assert any(t["list_id"] == "L1" for t in client.get("/targets").json())
+
+
+def test_add_target_list_requires_list_id(client):
+    r = client.post("/targets", json={"kind": "list", "handle": "絡み候補A"})
+    assert r.status_code == 400

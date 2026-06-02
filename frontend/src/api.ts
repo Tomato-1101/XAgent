@@ -184,6 +184,12 @@ export const api = {
   listTargets: () => req<Target[]>("/targets"),
   addTarget: (handle: string) =>
     req<Target>("/targets", { method: "POST", body: JSON.stringify({ handle }) }),
+  // Xリストを丸ごと対象に追加。巡回時に現メンバーへ展開され、リスト更新が自動連携される。
+  addTargetList: (name: string, listId: string) =>
+    req<Target>("/targets", {
+      method: "POST",
+      body: JSON.stringify({ kind: "list", handle: name, list_id: listId }),
+    }),
   deleteTarget: (id: number) => req<{ deleted: number }>(`/targets/${id}`, { method: "DELETE" }),
 
   monitorRunOnce: () =>
