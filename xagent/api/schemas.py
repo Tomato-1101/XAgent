@@ -128,6 +128,8 @@ class MonitorSettingsRequest(BaseModel):
     manual_targets_enabled: bool | None = None
     keyword_search_enabled: bool | None = None
     following_enabled: bool | None = None
+    auto_monitor_enabled: bool | None = None  # デーモン: 自動監視(絡み案生成)
+    auto_post_enabled: bool | None = None      # デーモン: 予約分の自動投稿
     max_drafts_per_run: int | None = None  # 1監視サイクルの総生成数上限
 
 

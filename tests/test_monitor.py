@@ -28,6 +28,16 @@ def test_poll_targets_creates_quote_drafts(session, fake_formatter):
     assert drafts[0].target_tweet_id == "202"
 
 
+def test_auto_run_flags_default_on_and_toggle(session):
+    """デーモンの自動運用スイッチは既定ON。UI(set_monitor_settings)からON/OFFできる。"""
+    cfg = monitor.get_monitor_settings(session)
+    assert cfg.auto_monitor_enabled is True
+    assert cfg.auto_post_enabled is True
+    cfg = monitor.set_monitor_settings(session, auto_monitor_enabled=False, auto_post_enabled=False)
+    assert cfg.auto_monitor_enabled is False
+    assert cfg.auto_post_enabled is False
+
+
 def test_poll_lists_expands_members_to_quotes(session, fake_formatter):
     """kind=LIST はリストの現メンバーへ展開し、各メンバーの新規投稿に引用RT案を作る。"""
     session.add(EngageTarget(kind=TargetKind.LIST, handle="絡み候補A", list_id="L1", active=True))

@@ -42,6 +42,8 @@ _ADDED_COLUMNS = {
     ],
     "monitorsettings": [
         ("max_drafts_per_run", "INTEGER", "DEFAULT 10"),
+        ("auto_monitor_enabled", "BOOLEAN", "DEFAULT 1"),
+        ("auto_post_enabled", "BOOLEAN", "DEFAULT 1"),
     ],
     "engagetarget": [
         ("list_id", "VARCHAR", ""),

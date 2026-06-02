@@ -94,6 +94,8 @@ export interface MonitorSettings {
   manual_targets_enabled: boolean;
   keyword_search_enabled: boolean;
   following_enabled: boolean;
+  auto_monitor_enabled: boolean; // デーモン: 自動監視(絡み案生成)
+  auto_post_enabled: boolean; // デーモン: 予約分の自動投稿
   max_drafts_per_run: number; // 1監視サイクルの総生成数上限
   updated_at?: string;
 }

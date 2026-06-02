@@ -176,6 +176,10 @@ class MonitorSettings(SQLModel, table=True):
     manual_targets_enabled: bool = True
     keyword_search_enabled: bool = False
     following_enabled: bool = False
+    # 常駐デーモンの自動実行スイッチ。Falseにすると、プロセスは動いていても各ティックが
+    # その処理をスキップする(=デーモンを止めずにUIから一時停止/再開できる)。
+    auto_monitor_enabled: bool = True   # 監視ティック(絡み案の自動生成)を動かすか
+    auto_post_enabled: bool = True      # キューティック(予約分の自動投稿)を動かすか
     # 1監視サイクルで作る下書きの総数上限。一気に生成しすぎてAPIを圧迫しないための安全弁。
     max_drafts_per_run: int = 10
     updated_at: datetime = Field(default_factory=_utcnow)

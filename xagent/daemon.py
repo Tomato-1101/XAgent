@@ -14,7 +14,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from .db import get_session, init_db
 from .formatter import Formatter
-from .monitor import run_once
+from .monitor import get_monitor_settings, run_once
 from .notify import notify
 from .scheduler import process_due_queue
 from .x_client import XClient, XClientError
@@ -25,6 +25,9 @@ log = logging.getLogger("xagent.daemon")
 def monitor_tick() -> None:
     try:
         with get_session() as s:
+            # UIの自動運用スイッチ(毎ティック参照)。OFFならプロセスは動かしたまま処理だけ止める。
+            if not get_monitor_settings(s).auto_monitor_enabled:
+                return
             x = XClient.from_settings()
             me = x.get_me()
             res = run_once(s, x, Formatter(), me["id"])
@@ -41,6 +44,8 @@ def monitor_tick() -> None:
 def queue_tick() -> None:
     try:
         with get_session() as s:
+            if not get_monitor_settings(s).auto_post_enabled:
+                return
             x = XClient.from_settings()
             res = process_due_queue(s, x)
             if res["posted"]:
