@@ -13,6 +13,20 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 
+def read_handle_lines(text: str) -> list[str]:
+    """ファイル内容を1行1ハンドルとして読む。`#`始まりのコメント行・空行は除外する。
+
+    ユーザーの一覧ファイルは `# === カテゴリ ===` 等の見出しを含むため、それらを捨てる。
+    """
+    out: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        out.append(s)
+    return out
+
+
 def normalize_handles(handles: Iterable[str]) -> list[str]:
     """@除去・空白除去・空行除去・順序保持の重複除去(大小無視)。"""
     seen: set[str] = set()

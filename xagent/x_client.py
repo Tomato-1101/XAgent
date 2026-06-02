@@ -78,6 +78,8 @@ class XClient:
             consumer_secret=settings.x_api_secret,
             access_token=settings.x_access_token,
             access_token_secret=settings.x_access_token_secret,
+            # 大量のメンバー追加等でレート制限に当たっても待機して継続する(取りこぼし防止)。
+            wait_on_rate_limit=True,
         )
         api_v1 = None
         if settings.x_access_token and settings.x_access_token_secret:

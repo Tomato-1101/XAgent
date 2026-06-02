@@ -382,7 +382,7 @@ def x_list_create(
     handles = accounts.replace("\n", ",").split(",")
     if file:
         with open(file, encoding="utf-8") as fh:
-            handles += fh.read().splitlines()
+            handles += lists_mod.read_handle_lines(fh.read())  # #コメント/空行を除外
     result = lists_mod.create_list_from_handles(
         _x(), name, handles, description=description, private=private
     )

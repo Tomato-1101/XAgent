@@ -74,3 +74,8 @@ def test_normalize_dedup_and_at_strip():
     assert lists_mod.normalize_handles(
         ["@Jack", "jack", " alice ", "", "  ", "JACK"]
     ) == ["Jack", "alice"]
+
+
+def test_read_handle_lines_skips_comments_and_blanks():
+    text = "# === カテゴリ ===\n@jack\n\n  \n@alice\n# 末尾コメント\nbob\n"
+    assert lists_mod.read_handle_lines(text) == ["@jack", "@alice", "bob"]
