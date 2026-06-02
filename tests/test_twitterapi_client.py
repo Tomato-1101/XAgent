@@ -167,7 +167,7 @@ def test_list_members_normalize_and_paginate(monkeypatch):
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.params.get("listId") == "999"
+        assert request.url.params.get("list_id") == "999"
         return httpx.Response(200, json=pages[request.url.params.get("cursor", "")])
 
     c = _client_with(monkeypatch, handler)

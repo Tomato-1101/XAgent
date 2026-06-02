@@ -113,6 +113,16 @@ class XClient:
             self._me = self.get_me()
         return self._me.get("username")
 
+    @staticmethod
+    def _guard(what: str, fn):
+        """公式X API呼び出しの tweepy 例外を XClientError に変換する(UIで503として扱えるように)。"""
+        import tweepy
+
+        try:
+            return fn()
+        except tweepy.TweepyException as e:
+            raise XClientError(f"{what}に失敗しました: {e}") from e
+
     # --- 書き込み ---
     def post(
         self,
@@ -182,7 +192,10 @@ class XClient:
 
     # --- リスト(書き込み: 公式APIのみ。自分のアカウント操作=BAN回避のため twitterapi.io は使わない) ---
     def create_list(self, name: str, description: str | None = None, private: bool = True) -> str:
-        resp = self._client.create_list(name=name, description=description, private=private)
+        resp = self._guard(
+            "リスト作成",
+            lambda: self._client.create_list(name=name, description=description, private=private),
+        )
         data = getattr(resp, "data", None) or {}
         list_id = data.get("id") if isinstance(data, dict) else getattr(data, "id", None)
         if not list_id:
@@ -197,16 +210,25 @@ class XClient:
         private: bool | None = None,
     ) -> None:
         # None の項目は tweepy 側で送信されない(=変更しない)。
-        self._client.update_list(id=list_id, name=name, description=description, private=private)
+        self._guard(
+            "リスト更新",
+            lambda: self._client.update_list(
+                id=list_id, name=name, description=description, private=private
+            ),
+        )
 
     def delete_list(self, list_id: str) -> None:
-        self._client.delete_list(id=list_id)
+        self._guard("リスト削除", lambda: self._client.delete_list(id=list_id))
 
     def add_list_member(self, list_id: str, user_id: str) -> None:
-        self._client.add_list_member(id=list_id, user_id=user_id)
+        self._guard(
+            "メンバー追加", lambda: self._client.add_list_member(id=list_id, user_id=user_id)
+        )
 
     def remove_list_member(self, list_id: str, user_id: str) -> None:
-        self._client.remove_list_member(id=list_id, user_id=user_id)
+        self._guard(
+            "メンバー削除", lambda: self._client.remove_list_member(id=list_id, user_id=user_id)
+        )
 
     # --- 読み取り ---
     def get_me(self) -> dict:
@@ -377,20 +399,25 @@ class XClient:
 
     # --- リスト読み取り ---
     def get_owned_lists(self, max_total: int = 100) -> list[dict]:
-        """自分が作成した(所有)リスト一覧。twitterapi.io 非対応のため公式APIのみ。"""
+        """自分が作成した(所有)リスト一覧。twitterapi.io 非対応のため公式APIのみ。
+
+        自分の(非公開含む)リストはユーザー認証が必要。Bearer(app-only)だとXが503を返す。
+        """
         import tweepy
 
         me = self.get_me()
-        out: list[dict] = []
-        paginator = tweepy.Paginator(
-            self._client.get_owned_lists,
-            id=me["id"],
-            list_fields=["member_count", "private", "description"],
-            max_results=100,
-        )
-        for lst in paginator.flatten(limit=max_total):
-            out.append(self._norm_list(lst))
-        return out
+
+        def _run() -> list[dict]:
+            paginator = tweepy.Paginator(
+                self._client.get_owned_lists,
+                id=me["id"],
+                user_auth=True,
+                list_fields=["member_count", "private", "description"],
+                max_results=100,
+            )
+            return [self._norm_list(lst) for lst in paginator.flatten(limit=max_total)]
+
+        return self._guard("所有リスト取得", _run)
 
     @staticmethod
     def _norm_list(lst: Any) -> dict:
@@ -403,34 +430,48 @@ class XClient:
         }
 
     def get_list_members(self, list_id: str, max_total: int = 100) -> list[dict]:
-        """リストのメンバーをプロフィール付きで返す。読み取りは twitterapi.io 優先・失敗時のみ公式。"""
-        return self._read(
-            lambda b: b.get_list_members(list_id, max_total=max_total),
-            lambda: self._official_get_list_members(list_id, max_total=max_total),
-            "get_list_members",
-        )
+        """リストのメンバーをプロフィール付きで返す。
+
+        公開リストは安価な twitterapi.io で読む。非公開リストは twitterapi.io(未認証プロキシ)が
+        中身を見られず空を返すため、空/失敗時は公式API(ユーザー認証)で読み直す。
+        """
+        if self._read_backend is not None:
+            try:
+                members = self._read_backend.get_list_members(list_id, max_total=max_total)
+                if members:  # 空=非公開で見えていない可能性 → 公式で読み直す
+                    return members
+            except TwitterApiIoError as e:
+                logger.warning(
+                    "twitterapi.io get_list_members 失敗→公式APIにフォールバック: %s", e
+                )
+        return self._official_get_list_members(list_id, max_total=max_total)
 
     def _official_get_list_members(self, list_id: str, max_total: int = 100) -> list[dict]:
         import tweepy
 
-        out: list[dict] = []
-        paginator = tweepy.Paginator(
-            self._client.get_list_members,
-            id=list_id,
-            user_fields=["name", "username", "description", "profile_image_url", "public_metrics"],
-            max_results=100,
-        )
-        for u in paginator.flatten(limit=max_total):
-            pm = getattr(u, "public_metrics", None)
-            pm = pm if isinstance(pm, dict) else {}
-            out.append(
-                {
-                    "id": str(getattr(u, "id", "")),
-                    "username": getattr(u, "username", None),
-                    "name": getattr(u, "name", None),
-                    "description": getattr(u, "description", "") or "",
-                    "profile_image_url": getattr(u, "profile_image_url", None),
-                    "followers_count": int(pm.get("followers_count", 0)),
-                }
+        def _run() -> list[dict]:
+            out: list[dict] = []
+            paginator = tweepy.Paginator(
+                self._client.get_list_members,
+                id=list_id,
+                user_auth=True,  # 自分のリスト(非公開含む)を読むためユーザー認証
+                user_fields=["name", "username", "description", "profile_image_url",
+                             "public_metrics"],
+                max_results=100,
             )
-        return out
+            for u in paginator.flatten(limit=max_total):
+                pm = getattr(u, "public_metrics", None)
+                pm = pm if isinstance(pm, dict) else {}
+                out.append(
+                    {
+                        "id": str(getattr(u, "id", "")),
+                        "username": getattr(u, "username", None),
+                        "name": getattr(u, "name", None),
+                        "description": getattr(u, "description", "") or "",
+                        "profile_image_url": getattr(u, "profile_image_url", None),
+                        "followers_count": int(pm.get("followers_count", 0)),
+                    }
+                )
+            return out
+
+        return self._guard("リストメンバー取得", _run)

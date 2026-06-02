@@ -115,8 +115,9 @@ class _FakeOfficial:
 class _FakeBackend:
     """twitterapi.io バックエンドのフェイク。fail=True で TwitterApiIoError を投げる。"""
 
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, empty_members=False):
         self.fail = fail
+        self.empty_members = empty_members  # 非公開リスト等で空が返る状況の再現
         self.calls = []
 
     def get_tweet(self, tweet_id):
@@ -141,6 +142,8 @@ class _FakeBackend:
         self.calls.append(("get_list_members", list_id, max_total))
         if self.fail:
             raise TwitterApiIoError("backend down")
+        if self.empty_members:
+            return []
         return [{
             "id": "99", "username": "bk_user", "name": "BK",
             "description": "", "profile_image_url": None, "followers_count": 7,
@@ -237,6 +240,17 @@ def test_get_list_members_falls_back_to_official():
     out = x.get_list_members("900")
     assert out[0]["username"] == "alice"               # 失敗→公式で読み直し
     assert out[0]["followers_count"] == 42             # public_metrics から
+    assert ("get_list_members", "900") in official.list_writes
+
+
+def test_get_list_members_empty_backend_falls_back_to_official():
+    # 非公開リストは twitterapi.io が空を返す → 公式(ユーザー認証)で読み直す
+    backend = _FakeBackend(empty_members=True)
+    official = _FakeOfficial()
+    x = XClient(official, read_backend=backend)
+    out = x.get_list_members("900")
+    assert out[0]["username"] == "alice"               # 空→公式で正しいメンバーを取得
+    assert backend.calls == [("get_list_members", "900", 100)]  # backendは試した
     assert ("get_list_members", "900") in official.list_writes
 
 

@@ -221,8 +221,8 @@ class TwitterApiIoClient:
         cursor = ""
         for _ in range(_MAX_PAGES):
             data = self._get(
-                "/twitter/list/get_list_members",
-                {"listId": str(list_id), "cursor": cursor},
+                "/twitter/list/members",
+                {"list_id": str(list_id), "cursor": cursor},
             )
             members = data.get("members") or data.get("users") or []
             for u in members:
