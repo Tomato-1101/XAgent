@@ -9,11 +9,28 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Callable
 
 from .config import Settings, get_settings
 from .text import FOLD_THRESHOLD_WEIGHTED, exceeds_fold, split_into_thread, weighted_length
+
+# 返信が毎回同じ長さに寄らないよう、生成ごとに目安の長さ帯をランダムに選ぶ。
+# (lo, hi, 表現) — 内容を優先しつつ、この幅を狙う。上限の140字は別途厳守。
+_REPLY_LENGTH_BANDS = [
+    (15, 40, "ごく短い一言で言い切る"),
+    (40, 80, "中くらいの長さで一言添える"),
+    (80, 130, "しっかり具体を添えて書く"),
+]
+
+
+def _reply_length_hint() -> str:
+    lo, hi, how = random.choice(_REPLY_LENGTH_BANDS)
+    return (
+        f"今回は{how}（目安 {lo}〜{hi} 字）。毎回同じ長さにせず幅を持たせる。"
+        "ただし内容を最優先し、字数合わせのために不自然に伸ばしたり削ったりしない。"
+    )
 
 CompleteFn = Callable[[str, str], str]
 
@@ -188,7 +205,8 @@ class Formatter:
         system = f"""あなたは日本語Xアカウントの運用アシスタント。相手の投稿に対する自然で価値あるリプライ案を1つ作る。
 
 ルール:
-- 必ず140字(日本語の字数)以内。1字も超えない。短く、相手に響く具体を添える。
+- 必ず140字(日本語の字数)以内。1字も超えない。相手に響く具体を添える。
+- {_reply_length_hint()}
 - 媚びすぎ・定型の褒めだけは避け、会話が続く一言にする。本人の口調を保つ。
 - 出力はリプライ本文のみ。
 

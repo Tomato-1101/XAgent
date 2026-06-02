@@ -46,3 +46,11 @@ def test_variations_inject_playbook():
     # 区切りの無い出力でも1案にフォールバックする。systemに型が乗ることだけ見る
     f.format_variations("メモ", n=2, playbook="型本文XYZ")
     assert "型本文XYZ" in cap["system"]
+
+
+def test_reply_includes_length_variation_hint():
+    """返信は毎回どれかの長さ帯ヒントが乗り、文字数が一定に寄らないようにする。"""
+    f, cap = _capturing_formatter()
+    f.generate_reply("相手の投稿", "someone")
+    assert "目安" in cap["system"]
+    assert "幅を持たせる" in cap["system"]
