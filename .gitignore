@@ -12,6 +12,10 @@ venv/
 !.env.example
 *.db
 *.sqlite3
+*.db.bak-*
+
+# アップロードされたメディア(ローカル保存)
+media/
 
 # Node / frontend
 node_modules/

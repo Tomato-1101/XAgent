@@ -17,7 +17,7 @@ from . import __version__, monitor as monitor_mod, scheduler as scheduler_mod, s
 from .db import get_session, init_db
 from .formatter import Formatter
 from .models import DraftStatus
-from .text import exceeds_fold, split_into_thread, weighted_length
+from .text import char_length, exceeds_fold, split_into_thread, weighted_length
 from .x_client import XClient, XClientError
 
 app = typer.Typer(help="Xエージェント CLI", no_args_is_help=True)
@@ -40,8 +40,46 @@ def _x() -> XClient:
 def _print_draft(d) -> None:
     segs = json.loads(d.segments_json or "[]")
     typer.echo(f"#{d.id} [{d.kind.value}/{d.status.value}] {('@'+d.target_handle) if d.target_handle else ''}")
+    if d.target_text:
+        typer.echo(f"   ↳ 元: {d.target_text[:60]}")
     for i, s in enumerate(segs, 1):
         typer.echo(f"   ({i}/{len(segs)}) {s}")
+
+
+def _draft_dict(d) -> dict:
+    """エージェントがパースしやすい機械可読な下書き表現(元ポスト本文・状態・対象込み)。"""
+    return {
+        "id": d.id,
+        "kind": d.kind.value,
+        "status": d.status.value,
+        "target_tweet_id": d.target_tweet_id,
+        "target_handle": d.target_handle,
+        "target_text": d.target_text,
+        "segments": json.loads(d.segments_json or "[]"),
+        "scheduled_at": d.scheduled_at.isoformat() if d.scheduled_at else None,
+    }
+
+
+def _resolve_target(url_or_id: str) -> tuple[str, str | None]:
+    """URL or 素のID から tweet_id を取り出す。URLなら handle も返す。"""
+    from .commands import extract_tweet_ref
+
+    ref = extract_tweet_ref(url_or_id)
+    if ref:
+        tweet_id, handle, _ = ref
+        return tweet_id, handle
+    return url_or_id.strip(), None
+
+
+def _fetch_target_text(tweet_id: str) -> tuple[str, str | None]:
+    """対象ツイート本文を best-effort で取得(資格情報未設定でもエラーにしない)。"""
+    try:
+        t = XClient.from_settings().get_tweet(tweet_id)
+    except Exception:
+        return "", None
+    if not t:
+        return "", None
+    return t.get("text", ""), t.get("author_handle")
 
 
 @app.command()
@@ -59,24 +97,30 @@ def init_db_cmd() -> None:
 
 @app.command()
 def preview(text: str, allow_long: bool = typer.Option(False, "--long")) -> None:
-    """LLM不使用: 加重文字数・折りたたみ・スレッド分割を表示。"""
-    typer.echo(f"加重文字数: {weighted_length(text)}  折りたたみ: {exceeds_fold(text)}")
+    """LLM不使用: 字数(140基準)・折りたたみ・スレッド分割を表示。"""
+    typer.echo(
+        f"字数: {char_length(text)}/140  加重: {weighted_length(text)}  折りたたみ: {exceeds_fold(text)}"
+    )
     segs = [text.strip()] if allow_long else split_into_thread(text)
     for i, s in enumerate(segs, 1):
-        typer.echo(f"  ({i}/{len(segs)}) ({weighted_length(s)}) {s}")
+        typer.echo(f"  ({i}/{len(segs)}) ({char_length(s)}字) {s}")
 
 
 @app.command()
 def compose(
     text: str,
     allow_long: bool = typer.Option(False, "--long"),
+    raw: bool = typer.Option(False, "--raw", help="整形(LLM)せず、自分が書いた文をそのまま下書き化"),
     emulate: str = typer.Option(None, "--emulate", help="真似るアカウント(@handle)。学習済みのみ有効"),
     variations: int = typer.Option(1, "--variations", help="言い回し違いをN案生成(最大5)"),
 ) -> None:
-    """テキストをClaudeで整形し、未承認の下書きを作成する。"""
+    """テキストをClaudeで整形(--rawで整形なし)し、未承認の下書きを作成する。
+
+    エージェントが自分で最終文を書いた場合は --raw を使う(再整形しない)。
+    """
     with _db() as s:
         f = Formatter()
-        if variations > 1:
+        if variations > 1 and not raw:
             ds = service.create_post_variations(
                 s, f, text, n=variations, allow_long=allow_long, emulate_handle=emulate
             )
@@ -84,10 +128,50 @@ def compose(
                 _print_draft(d)
         else:
             d = service.create_post_draft(
-                s, f, text, allow_long=allow_long, emulate_handle=emulate
+                s, f, text, allow_long=allow_long, emulate_handle=emulate, raw=raw
             )
             _print_draft(d)
             typer.echo("承認するには: xagent approve {}".format(d.id))
+
+
+@app.command()
+def reply(
+    target: str,
+    text: str,
+    raw: bool = typer.Option(False, "--raw", help="整形せず、書いた文をそのまま返信本文に"),
+    emulate: str = typer.Option(None, "--emulate", help="真似るアカウント(@handle)"),
+) -> None:
+    """指定ツイート(URL/ID)に、自分の文でリプライする下書きを作る。元ポスト本文も保存する。"""
+    tweet_id, handle = _resolve_target(target)
+    ttext, thandle = _fetch_target_text(tweet_id)
+    with _db() as s:
+        d = service.create_reply_command_draft(
+            s, Formatter(), tweet_id, text,
+            target_handle=handle or thandle, target_text=ttext,
+            raw=raw, emulate_handle=emulate,
+        )
+        _print_draft(d)
+        typer.echo("承認: xagent approve {} → 送信: xagent post {}".format(d.id, d.id))
+
+
+@app.command()
+def quote(
+    target: str,
+    text: str,
+    raw: bool = typer.Option(False, "--raw", help="整形せず、書いた文をそのまま引用コメントに"),
+    emulate: str = typer.Option(None, "--emulate", help="真似るアカウント(@handle)"),
+) -> None:
+    """指定ツイート(URL/ID)を、自分のコメント付きで引用RTする下書きを作る。引用元本文も保存する。"""
+    tweet_id, handle = _resolve_target(target)
+    ttext, thandle = _fetch_target_text(tweet_id)
+    with _db() as s:
+        d = service.create_quote_command_draft(
+            s, Formatter(), tweet_id, text,
+            target_handle=handle or thandle, target_text=ttext,
+            raw=raw, emulate_handle=emulate,
+        )
+        _print_draft(d)
+        typer.echo("承認: xagent approve {} → 送信: xagent post {}".format(d.id, d.id))
 
 
 @app.command("learn-account")
@@ -127,8 +211,9 @@ def monitor_config(
     manual: bool = typer.Option(None, "--manual/--no-manual"),
     keyword: bool = typer.Option(None, "--keyword/--no-keyword"),
     following: bool = typer.Option(None, "--following/--no-following"),
+    max_drafts: int = typer.Option(None, "--max", help="1監視サイクルの総生成数上限(API圧迫防止)"),
 ) -> None:
-    """絡み監視ソースのオン/オフを表示・変更する。"""
+    """絡み監視ソースのオン/オフと1サイクルの生成数上限を表示・変更する。"""
     with _db() as s:
         flags = {}
         if mentions is not None:
@@ -139,32 +224,48 @@ def monitor_config(
             flags["keyword_search_enabled"] = keyword
         if following is not None:
             flags["following_enabled"] = following
+        if max_drafts is not None:
+            flags["max_drafts_per_run"] = max_drafts
         if flags:
             monitor_mod.set_monitor_settings(s, **flags)
         cfg = monitor_mod.get_monitor_settings(s)
         typer.echo(
             f"mentions={cfg.mentions_enabled} manual={cfg.manual_targets_enabled} "
-            f"keyword={cfg.keyword_search_enabled} following={cfg.following_enabled}"
+            f"keyword={cfg.keyword_search_enabled} following={cfg.following_enabled} "
+            f"max_drafts_per_run={cfg.max_drafts_per_run}"
         )
 
 
 @app.command("list")
-def list_cmd(status: str = typer.Option(None, help="draft/approved/queued/posted/rejected")) -> None:
-    """下書き一覧。"""
+def list_cmd(
+    status: str = typer.Option(None, help="draft/approved/queued/posted/rejected"),
+    json_out: bool = typer.Option(False, "--json", help="機械可読JSONで出力(エージェント向け)"),
+) -> None:
+    """下書き一覧(--json で機械可読出力)。"""
     with _db() as s:
         st = DraftStatus(status) if status else None
-        for d in service.list_drafts(s, status=st):
-            _print_draft(d)
+        drafts = service.list_drafts(s, status=st)
+        if json_out:
+            typer.echo(json.dumps([_draft_dict(d) for d in drafts], ensure_ascii=False))
+        else:
+            for d in drafts:
+                _print_draft(d)
 
 
 @app.command()
-def show(draft_id: int) -> None:
-    """下書きの詳細表示。"""
+def show(
+    draft_id: int,
+    json_out: bool = typer.Option(False, "--json", help="機械可読JSONで出力(エージェント向け)"),
+) -> None:
+    """下書きの詳細表示(--json で元ポスト本文・状態・対象を含む機械可読出力)。"""
     with _db() as s:
         d = service.get_draft(s, draft_id)
         if not d:
             raise typer.BadParameter("見つかりません。")
-        _print_draft(d)
+        if json_out:
+            typer.echo(json.dumps(_draft_dict(d), ensure_ascii=False))
+        else:
+            _print_draft(d)
 
 
 @app.command()
@@ -186,6 +287,28 @@ def reject(draft_id: int) -> None:
         if d:
             service.reject_draft(s, d)
             typer.echo(f"#{draft_id} を却下しました。")
+
+
+@app.command()
+def cancel(draft_id: int) -> None:
+    """下書き/承認済み/予約を取消(ゴミ箱へ)。予約済みは自動投稿もキャンセルされる。"""
+    with _db() as s:
+        d = service.get_draft(s, draft_id)
+        if not d:
+            raise typer.BadParameter("見つかりません。")
+        service.cancel_draft(s, d)
+        typer.echo(f"#{draft_id} を取消しました(ゴミ箱)。復元: xagent restore {draft_id}")
+
+
+@app.command()
+def restore(draft_id: int) -> None:
+    """取消(ゴミ箱)から下書きへ復元する。"""
+    with _db() as s:
+        d = service.get_draft(s, draft_id)
+        if not d:
+            raise typer.BadParameter("見つかりません。")
+        service.restore_draft(s, d)
+        typer.echo(f"#{draft_id} を下書きに復元しました。")
 
 
 @app.command()

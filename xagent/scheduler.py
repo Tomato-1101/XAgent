@@ -18,8 +18,27 @@ from .models import Draft, DraftStatus
 from .service import post_draft
 from .x_client import XClient
 
-# 日本時間で一般にエンゲージが高いとされる時間帯(時)。実データがあれば後で差し替え。
-DEFAULT_SLOTS_HOUR: tuple[int, ...] = (7, 8, 12, 18, 21, 22)
+# 日本時間で一般にエンゲージが高いとされる時間帯(時)。ネット調査(下記 RECOMMENDED_SOURCES)に基づく。
+# 朝の通勤(8) / 昼休み(12) / 夕方(16) / 帰宅後(19) / 夜のゴールデンタイム(21,22)。
+DEFAULT_SLOTS_HOUR: tuple[int, ...] = (8, 12, 16, 19, 21, 22)
+
+# UIに「おすすめ」として表示するスロット(JST)。tier: best > great > good。
+RECOMMENDED_SLOTS: list[dict] = [
+    {"hour": 8, "label": "朝の通勤・通学", "tier": "good"},
+    {"hour": 12, "label": "昼休み", "tier": "good"},
+    {"hour": 16, "label": "夕方（平日はRTが伸びやすい）", "tier": "good"},
+    {"hour": 19, "label": "帰宅後", "tier": "great"},
+    {"hour": 21, "label": "夜のゴールデンタイム（最有力）", "tier": "best"},
+    {"hour": 22, "label": "夜のゴールデンタイム", "tier": "great"},
+]
+RECOMMENDED_NOTE = (
+    "一般的な高エンゲージ時間帯（JST）です。曜日は火〜木が強く、夜は特に木曜が伸びやすい傾向。"
+    "通勤帯はインプレッションは出るが反応は夜の方が付きやすい。将来は自分のXの統計で自動最適化予定。"
+)
+RECOMMENDED_SOURCES = [
+    "Sprout Social — Best Times to Post on X (Twitter)",
+    "WEB集客ラボ byGMO / 吉和の森 / Web担当者Forum（日本向け時間帯分析・2025）",
+]
 
 
 def _to_utc_naive(dt_aware: datetime) -> datetime:
@@ -52,6 +71,29 @@ def next_optimal_slot(
             return cand_utc
     # フォールバック: ホライズンを超えたら最終候補の翌日同時刻
     return now_utc + timedelta(days=horizon_days)
+
+
+def recommended_times(
+    now_utc: datetime, count: int = 3, tz_name: str = "Asia/Tokyo"
+) -> dict:
+    """おすすめスロット(JST)と、直近の具体的なおすすめ日時(naive UTC, ISO)を返す。
+
+    next_slots は now 以降で重ならない直近 count 件の最適スロット。UIの初期値候補に使う。
+    """
+    nexts: list[datetime] = []
+    taken: list[datetime] = []
+    cur = now_utc
+    for _ in range(max(0, count)):
+        slot = next_optimal_slot(cur, taken, tz_name=tz_name)
+        nexts.append(slot)
+        taken.append(slot)
+        cur = slot
+    return {
+        "slots": RECOMMENDED_SLOTS,
+        "note": RECOMMENDED_NOTE,
+        "sources": RECOMMENDED_SOURCES,
+        "next_slots": [s.isoformat() for s in nexts],
+    }
 
 
 def queued_scheduled_times(session: Session) -> list[datetime]:
@@ -102,6 +144,7 @@ def process_due_queue(
             ids = post_draft(
                 session, x_client, draft, settings=settings, now=now,
                 trigger=PostTrigger.SCHEDULED,
+                override=draft.blackout_override,  # 二段階確認済みの予約だけ制限帯でも発火
             )
             posted.append({"draft_id": draft.id, "tweet_ids": ids})
         except PolicyViolation as e:

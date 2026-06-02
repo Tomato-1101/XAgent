@@ -10,8 +10,10 @@ from datetime import datetime, timezone
 
 from sqlmodel import Session, select
 
+from . import maintenance
+from .blackout import get_blackout_settings, is_blackout
 from .config import Settings, get_settings
-from .cost import log_cost
+from .cost import bill_formatter_usage, log_cost
 from .formatter import Formatter
 from .guards import (
     PolicyViolation,
@@ -19,11 +21,14 @@ from .guards import (
     RateLimitConfig,
     RateLimiter,
     can_transition,
+    ensure_not_blackout,
     ensure_post_authorized,
 )
+from .media import validate_media_set
 from .models import CostKind, Draft, DraftKind, DraftStatus
 from .profiles import example_posts_for_account, get_profile_by_handle
 from .style import active_style_guide
+from .text import split_into_thread
 from .x_client import XClient
 
 
@@ -62,6 +67,18 @@ def _media(draft: Draft) -> list[str]:
     return json.loads(draft.media_paths_json or "[]")
 
 
+def _finalize_draft(
+    session: Session, formatter: Formatter, draft: Draft, note: str
+) -> Draft:
+    """下書きを永続化し、Claudeコストを記録、DB容量上限を点検する共通処理。"""
+    session.add(draft)
+    bill_formatter_usage(session, formatter, note=note)
+    session.commit()
+    session.refresh(draft)
+    maintenance.enforce_db_capacity(session)
+    return draft
+
+
 # --- 下書き生成 -------------------------------------------------------------
 
 def create_post_draft(
@@ -72,29 +89,33 @@ def create_post_draft(
     allow_long: bool = False,
     media_paths: list[str] | None = None,
     emulate_handle: str | None = None,
+    raw: bool = False,
 ) -> Draft:
     """テキストを整形して未承認の下書きを作る。
 
     常時適用は手入力のスタイルガイド(active_style_guide)のみ。学習データは自動注入しない。
     emulate_handle を指定したときだけ、そのアカウントの特徴・代表投稿を整形に乗せる。
+    raw=True なら整形(LLM)を行わず、入力をそのまま本文にする(スレッド分割のみ)。
     """
-    sg = style_guide if style_guide is not None else active_style_guide(session)
-    emulate_text, emulate_examples = _emulate_inputs(session, emulate_handle)
-    res = formatter.format_post(
-        source_text, sg, allow_long=allow_long,
-        emulate_profile_text=emulate_text, emulate_examples=emulate_examples,
-    )
+    validate_media_set(media_paths)
+    if raw:
+        segments = [source_text.strip()] if allow_long else split_into_thread(source_text)
+    else:
+        sg = style_guide if style_guide is not None else active_style_guide(session)
+        emulate_text, emulate_examples = _emulate_inputs(session, emulate_handle)
+        res = formatter.format_post(
+            source_text, sg, allow_long=allow_long,
+            emulate_profile_text=emulate_text, emulate_examples=emulate_examples,
+        )
+        segments = res.segments
     draft = Draft(
         kind=DraftKind.POST,
         status=DraftStatus.DRAFT,
         source_text=source_text,
-        segments_json=json.dumps(res.segments, ensure_ascii=False),
+        segments_json=json.dumps(segments, ensure_ascii=False),
         media_paths_json=json.dumps(media_paths or [], ensure_ascii=False),
     )
-    session.add(draft)
-    session.commit()
-    session.refresh(draft)
-    return draft
+    return _finalize_draft(session, formatter, draft, "compose")
 
 
 def create_post_variations(
@@ -105,8 +126,10 @@ def create_post_variations(
     style_guide: str | None = None,
     allow_long: bool = False,
     emulate_handle: str | None = None,
+    media_paths: list[str] | None = None,
 ) -> list[Draft]:
-    """1つのメモから言い回し違いのn案を未承認下書きとして作る。"""
+    """1つのメモから言い回し違いのn案を未承認下書きとして作る(同じメディアを各案に付与)。"""
+    validate_media_set(media_paths)
     sg = style_guide if style_guide is not None else active_style_guide(session)
     emulate_text, emulate_examples = _emulate_inputs(session, emulate_handle)
     results = formatter.format_variations(
@@ -120,12 +143,15 @@ def create_post_variations(
             status=DraftStatus.DRAFT,
             source_text=source_text,
             segments_json=json.dumps(res.segments, ensure_ascii=False),
+            media_paths_json=json.dumps(media_paths or [], ensure_ascii=False),
         )
         session.add(d)
         drafts.append(d)
+    bill_formatter_usage(session, formatter, note="compose-variations")
     session.commit()
     for d in drafts:
         session.refresh(d)
+    maintenance.enforce_db_capacity(session)
     return drafts
 
 
@@ -142,15 +168,12 @@ def create_reply_draft(
     draft = Draft(
         kind=DraftKind.REPLY,
         status=DraftStatus.DRAFT,
-        source_text=target_text,
         segments_json=json.dumps(res.segments, ensure_ascii=False),
         target_tweet_id=target_tweet_id,
         target_handle=target_handle,
+        target_text=target_text,  # 元ポスト本文を表示用に保持(人間が承認判断できるように)
     )
-    session.add(draft)
-    session.commit()
-    session.refresh(draft)
-    return draft
+    return _finalize_draft(session, formatter, draft, "reply")
 
 
 def create_quote_draft(
@@ -166,14 +189,130 @@ def create_quote_draft(
     draft = Draft(
         kind=DraftKind.QUOTE,
         status=DraftStatus.DRAFT,
-        source_text=target_text,
         segments_json=json.dumps(res.segments, ensure_ascii=False),
         target_tweet_id=target_tweet_id,
         target_handle=target_handle,
+        target_text=target_text,  # 引用元の本文を表示用に保持
+    )
+    return _finalize_draft(session, formatter, draft, "quote")
+
+
+def _compose_command_segments(
+    session: Session,
+    formatter: Formatter,
+    comment: str,
+    raw: bool,
+    allow_long: bool,
+    style_guide: str | None,
+    emulate_handle: str | None,
+) -> list[str]:
+    """指令フロー(quote/reply)で、自分のコメントを raw or 整形して本文セグメントにする共通処理。"""
+    if raw:
+        return [comment.strip()] if allow_long else split_into_thread(comment)
+    sg = style_guide if style_guide is not None else active_style_guide(session)
+    emulate_text, emulate_examples = _emulate_inputs(session, emulate_handle)
+    res = formatter.format_post(
+        comment, sg, allow_long=allow_long,
+        emulate_profile_text=emulate_text, emulate_examples=emulate_examples,
+    )
+    return res.segments
+
+
+def create_quote_command_draft(
+    session: Session,
+    formatter: Formatter,
+    target_tweet_id: str,
+    comment: str,
+    target_handle: str | None = None,
+    target_text: str = "",
+    raw: bool = False,
+    style_guide: str | None = None,
+    allow_long: bool = False,
+    emulate_handle: str | None = None,
+    media_paths: list[str] | None = None,
+) -> Draft:
+    """指令フロー用: ユーザー/エージェント自身のコメントを引用RTの本文として下書き化する。
+
+    create_quote_draft は相手投稿から AI がコメントを生成するが、こちらは
+    自分が書いたコメントを口調整形(または raw でそのまま)して引用に添える。
+    target_text には引用元の本文(取得できれば)を表示用に保持する。
+    """
+    validate_media_set(media_paths)
+    segments = _compose_command_segments(
+        session, formatter, comment, raw, allow_long, style_guide, emulate_handle
+    )
+    draft = Draft(
+        kind=DraftKind.QUOTE,
+        status=DraftStatus.DRAFT,
+        source_text=comment,
+        segments_json=json.dumps(segments, ensure_ascii=False),
+        media_paths_json=json.dumps(media_paths or [], ensure_ascii=False),
+        target_tweet_id=target_tweet_id,
+        target_handle=target_handle,
+        target_text=target_text,
+    )
+    return _finalize_draft(session, formatter, draft, "command-quote")
+
+
+def create_reply_command_draft(
+    session: Session,
+    formatter: Formatter,
+    target_tweet_id: str,
+    comment: str,
+    target_handle: str | None = None,
+    target_text: str = "",
+    raw: bool = False,
+    style_guide: str | None = None,
+    allow_long: bool = False,
+    emulate_handle: str | None = None,
+    media_paths: list[str] | None = None,
+) -> Draft:
+    """指令フロー用: 指定ツイートに対し、自分(ユーザー/エージェント)が書いた文でリプライする下書き。
+
+    create_reply_draft は相手投稿から AI が返信文を生成するが、こちらは
+    自分が書いた文を口調整形(または raw でそのまま)して返信本文にする。
+    target_text には返信先の本文(取得できれば)を表示用に保持する。
+    """
+    validate_media_set(media_paths)
+    segments = _compose_command_segments(
+        session, formatter, comment, raw, allow_long, style_guide, emulate_handle
+    )
+    draft = Draft(
+        kind=DraftKind.REPLY,
+        status=DraftStatus.DRAFT,
+        source_text=comment,
+        segments_json=json.dumps(segments, ensure_ascii=False),
+        media_paths_json=json.dumps(media_paths or [], ensure_ascii=False),
+        target_tweet_id=target_tweet_id,
+        target_handle=target_handle,
+        target_text=target_text,
+    )
+    return _finalize_draft(session, formatter, draft, "command-reply")
+
+
+def create_repost_draft(
+    session: Session,
+    target_tweet_id: str,
+    target_text: str = "",
+    target_handle: str | None = None,
+) -> Draft:
+    """自分の投稿の通常リポスト(コメント無し)の下書きを作る。整形(LLM)は不要。
+
+    本文セグメントは持たず、target_tweet_id を RT 対象にする。
+    target_text は一覧表示用にリポスト元の本文を控えとして保存する。
+    """
+    draft = Draft(
+        kind=DraftKind.REPOST,
+        status=DraftStatus.DRAFT,
+        segments_json="[]",
+        target_tweet_id=target_tweet_id,
+        target_handle=target_handle,
+        target_text=target_text,
     )
     session.add(draft)
     session.commit()
     session.refresh(draft)
+    maintenance.enforce_db_capacity(session)
     return draft
 
 
@@ -228,11 +367,32 @@ def reject_draft(session: Session, draft: Draft) -> Draft:
     return _set_status(session, draft, DraftStatus.REJECTED)
 
 
+def cancel_draft(session: Session, draft: Draft) -> Draft:
+    """取消(ゴミ箱へ)。予約済みなら予約も解除し、自動投稿されないようにする。
+
+    行はDBに残す(容量超過時に古い順で物理削除)。投稿済みは取消できない。
+    """
+    if draft.status == DraftStatus.QUEUED:
+        draft.scheduled_at = None  # 予約解除(到来しても投稿対象にならない)
+    return _set_status(session, draft, DraftStatus.CANCELED)
+
+
+def restore_draft(session: Session, draft: Draft) -> Draft:
+    """取消(ゴミ箱)から下書きへ復元する。"""
+    return _set_status(session, draft, DraftStatus.DRAFT)
+
+
 def queue_draft(
-    session: Session, draft: Draft, scheduled_at: datetime | None = None
+    session: Session,
+    draft: Draft,
+    scheduled_at: datetime | None = None,
+    blackout_override: bool = False,
 ) -> Draft:
     if scheduled_at is not None:
         draft.scheduled_at = to_naive_utc(scheduled_at)
+    if blackout_override:
+        # 制限帯への予約を二段階確認した → 発火時刻に人がいなくても投稿を許可する
+        draft.blackout_override = True
     return _set_status(session, draft, DraftStatus.QUEUED)
 
 
@@ -260,11 +420,13 @@ def post_draft(
     settings: Settings | None = None,
     now: datetime | None = None,
     trigger: PostTrigger = PostTrigger.MANUAL,
+    override: bool = False,
 ) -> list[str]:
-    """下書きを実際にXへ投稿する。ガード(緊急停止/認証・予約/頻度)を必ず通す。
+    """下書きを実際にXへ投稿する。ガード(緊急停止/認証・予約/制限帯/頻度)を必ず通す。
 
     trigger=MANUAL(既定): 人の明示操作。MANUAL は承認済み/キュー済みのみ可。
     trigger=SCHEDULED: スケジューラ発火。予約時刻のある到来済みキューのみ可。
+    override: 制限時間帯でも投稿してよいか(手動の二段階確認 or 予約時に保存した許可)。
     """
     settings = settings or get_settings()
     now = now or _utcnow()
@@ -275,9 +437,28 @@ def post_draft(
     # 認証(人の明示操作) か 予約(到来済みscheduled_at) でなければ投稿しない
     ensure_post_authorized(draft.status, draft.scheduled_at, trigger, now)
 
+    # 制限時間帯(平日の指定帯)は、二段階確認(override)が無い限りブロックする
+    in_blackout, reason = is_blackout(now, get_blackout_settings(session), settings.timezone)
+    ensure_not_blackout(in_blackout, override or draft.blackout_override, reason)
+
     decision = _rate_limiter(settings).check(recent_posted_times(session), now)
     if not decision.allowed:
         raise PolicyViolation(decision.reason)
+
+    if draft.kind == DraftKind.REPOST:
+        # 通常リポスト(コメント無し)。本文は不要、対象IDをRTする。
+        if not draft.target_tweet_id:
+            raise PolicyViolation("リポスト対象のツイートIDがありません。")
+        ids = [x_client.retweet(draft.target_tweet_id)]
+        log_cost(session, CostKind.WRITE, units=1, note=f"repost#{draft.id}")
+        draft.posted_at = now
+        draft.posted_tweet_id = draft.target_tweet_id  # RTには新規IDが無いため対象IDを記録
+        draft.status = DraftStatus.POSTED
+        draft.updated_at = now
+        session.add(draft)
+        session.commit()
+        session.refresh(draft)
+        return ids
 
     segments = _segments(draft)
     if not segments:

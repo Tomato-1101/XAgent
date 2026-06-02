@@ -1,5 +1,5 @@
-export type DraftStatus = "draft" | "approved" | "queued" | "posted" | "rejected";
-export type DraftKind = "post" | "reply" | "quote";
+export type DraftStatus = "draft" | "approved" | "queued" | "posted" | "rejected" | "canceled";
+export type DraftKind = "post" | "reply" | "quote" | "repost";
 
 export interface Draft {
   id: number;
@@ -10,9 +10,11 @@ export interface Draft {
   media_paths: string[];
   target_tweet_id: string | null;
   target_handle: string | null;
+  target_text: string; // 絡む相手の元ポスト本文(reply/quote/repost の表示用)
   scheduled_at: string | null;
   posted_at: string | null;
   posted_tweet_id: string | null;
+  blackout_override: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -20,10 +22,12 @@ export interface Draft {
 export interface PreviewSegment {
   text: string;
   weighted_length: number;
+  char_length: number;
 }
 
 export interface PreviewResponse {
   weighted_length: number;
+  char_length: number;
   folded: boolean;
   over_limit: boolean;
   segments: PreviewSegment[];
@@ -39,9 +43,22 @@ export interface Target {
   notes: string | null;
 }
 
+export interface CostKindStat {
+  units: number;
+  cost_usd: number;
+}
+
+export interface CostGroup {
+  cost_usd: number;
+  units: number;
+  by_kind: Record<string, CostKindStat>;
+}
+
 export interface CostResponse {
   total_usd: number;
-  by_kind: Record<string, { units: number; cost_usd: number }>;
+  by_kind: Record<string, CostKindStat>;
+  x_api: CostGroup;
+  claude_api: CostGroup;
 }
 
 export interface SummaryResponse {
@@ -75,5 +92,59 @@ export interface MonitorSettings {
   manual_targets_enabled: boolean;
   keyword_search_enabled: boolean;
   following_enabled: boolean;
+  max_drafts_per_run: number; // 1監視サイクルの総生成数上限
   updated_at?: string;
+}
+
+export type MediaKind = "image" | "video" | "other";
+
+export interface MediaItem {
+  path: string; // サーバ保持パス(投稿時に使用)
+  kind: MediaKind;
+  filename: string;
+}
+
+export interface RecommendedSlot {
+  hour: number;
+  label: string;
+  tier: "best" | "great" | "good";
+}
+
+export interface RecommendedTimes {
+  slots: RecommendedSlot[];
+  note: string;
+  sources: string[];
+  next_slots: string[]; // naive UTC ISO
+}
+
+export interface Interpreted {
+  action: "quote" | "post";
+  target_url: string | null;
+  target_tweet_id: string | null;
+  target_handle: string | null;
+  body: string;
+  raw: boolean;
+  note: string;
+}
+
+export interface RecentPost {
+  tweet_id: string;
+  text: string;
+  created_at: string | null;
+  like_count: number;
+  retweet_count: number;
+  url: string;
+}
+
+export interface BlackoutSettings {
+  enabled: boolean;
+  weekdays: number[]; // 月=0..日=6
+  windows: [string, string][]; // [["09:00","12:00"], ...]
+  updated_at?: string | null;
+}
+
+export interface BlackoutStatus {
+  blackout: boolean;
+  reason: string;
+  at: string;
 }

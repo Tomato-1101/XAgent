@@ -28,14 +28,29 @@ class Settings(BaseSettings):
     x_access_token_secret: str | None = None
     x_bearer_token: str | None = None
 
+    # --- twitterapi.io (他人の投稿の読み取り用。安価・読取専用の非公式プロキシ) ---
+    # 自分のアカウントの書き込みは公式Xのみ(BAN回避)。読み取りはコスト削減でこちらを優先し、
+    # 失敗時のみ公式Xにフォールバックする。未設定なら読み取りも公式X(オプトイン)。
+    twitterapi_io_key: str | None = None
+
     # --- DB ---
     db_path: str = "xagent.db"
+    # DBファイルの容量上限(バイト)。超えると古い端末状態(投稿済み/却下/取消)から物理削除する。
+    # 既定2GB(テキスト主体なら数千〜数万件保存できる安全弁。通常は発動しない)。
+    max_db_bytes: int = 2 * 1024 * 1024 * 1024
+
+    # --- メディア(画像/動画)保存先 ---
+    media_dir: str = "media"  # アップロード画像/動画のローカル保存先(投稿時にXへ上げる)
 
     # --- ポリシーガード(安全運用の既定値) ---
     max_posts_per_day: int = 10       # 自然な上限(2-10)。超過は既定で抑止
     hard_cap_posts_per_day: int = 100  # 安全側のハード上限(規約上限2400より十分低く)
     min_post_interval_seconds: int = 300  # 連投の最小間隔
     posting_enabled: bool = True      # 緊急停止スイッチ。Falseで手動/予約とも全投稿を停止
+
+    # --- 予約投稿の自動発火(APIプロセス内の常駐スケジューラ) ---
+    scheduler_enabled: bool = True    # Falseで予約キューの自動処理を止める(手動投稿は可)
+    scheduler_interval_seconds: int = 60  # 予約キューを点検する間隔
 
     # --- Web API (任意の認証) ---
     api_token: str | None = None      # 設定時はFastAPIの書込系で X-API-Token を必須にする

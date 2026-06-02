@@ -1,16 +1,28 @@
 import type {
   AccountProfile,
+  BlackoutSettings,
+  BlackoutStatus,
   CostResponse,
   Draft,
   DraftStatus,
+  Interpreted,
   Me,
+  MediaItem,
   MonitorSettings,
   PreviewResponse,
+  RecentPost,
+  RecommendedTimes,
   SummaryResponse,
   Target,
 } from "./types";
 
 const BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
+/** 保持パス(media/xxx.jpg)からプレビュー用URLを作る。 */
+export function mediaUrl(path: string): string {
+  const name = path.split("/").pop() ?? path;
+  return `${BASE}/media/files/${name}`;
+}
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -41,10 +53,17 @@ export const api = {
       body: JSON.stringify({ text, allow_long }),
     }),
 
-  compose: (text: string, allow_long = false, emulate_handle?: string, style_guide?: string) =>
+  compose: (
+    text: string,
+    allow_long = false,
+    emulate_handle?: string,
+    media_paths: string[] = [],
+    style_guide?: string,
+    raw = false
+  ) =>
     req<Draft>("/compose", {
       method: "POST",
-      body: JSON.stringify({ text, allow_long, emulate_handle, style_guide }),
+      body: JSON.stringify({ text, allow_long, emulate_handle, media_paths, style_guide, raw }),
     }),
 
   composeVariations: (
@@ -52,12 +71,60 @@ export const api = {
     n_variations: number,
     allow_long = false,
     emulate_handle?: string,
-    style_guide?: string
+    media_paths: string[] = [],
+    style_guide?: string,
+    raw = false
   ) =>
     req<Draft[]>("/compose/variations", {
       method: "POST",
-      body: JSON.stringify({ text, allow_long, n_variations, emulate_handle, style_guide }),
+      body: JSON.stringify({
+        text,
+        allow_long,
+        n_variations,
+        emulate_handle,
+        media_paths,
+        style_guide,
+        raw,
+      }),
     }),
+
+  // 自由文の指令を解析する(下書きは作らない。確認用)
+  interpret: (text: string) =>
+    req<Interpreted>("/compose/interpret", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+
+  // 確認済みの指令から下書きを作る(引用RT or 通常投稿、整形 or そのまま)
+  command: (payload: {
+    action: "quote" | "reply" | "post";
+    text: string;
+    target_tweet_id?: string | null;
+    target_handle?: string | null;
+    raw?: boolean;
+    allow_long?: boolean;
+    emulate_handle?: string;
+    media_paths?: string[];
+    style_guide?: string;
+  }) => req<Draft>("/compose/command", { method: "POST", body: JSON.stringify(payload) }),
+
+  uploadMedia: async (file: File): Promise<MediaItem> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    // Content-Type は指定しない(ブラウザが multipart 境界を付ける)
+    const res = await fetch(`${BASE}/media/upload`, { method: "POST", body: fd });
+    if (!res.ok) {
+      let detail = `${res.status}`;
+      try {
+        const b = await res.json();
+        detail = b.detail ? `${res.status}: ${b.detail}` : detail;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
+    return res.json() as Promise<MediaItem>;
+  },
 
   listDrafts: (status?: DraftStatus, kind?: string) => {
     const q = new URLSearchParams();
@@ -72,12 +139,23 @@ export const api = {
 
   approve: (id: number) => req<Draft>(`/drafts/${id}/approve`, { method: "POST" }),
   reject: (id: number) => req<Draft>(`/drafts/${id}/reject`, { method: "POST" }),
-  queue: (id: number, mode: "optimal" | "time" = "optimal", scheduled_at?: string) =>
+  cancelDraft: (id: number) => req<Draft>(`/drafts/${id}/cancel`, { method: "POST" }),
+  restoreDraft: (id: number) => req<Draft>(`/drafts/${id}/restore`, { method: "POST" }),
+  queue: (
+    id: number,
+    mode: "optimal" | "time" = "optimal",
+    scheduled_at?: string,
+    override = false
+  ) =>
     req<Draft>(`/drafts/${id}/queue`, {
       method: "POST",
-      body: JSON.stringify({ mode, scheduled_at }),
+      body: JSON.stringify({ mode, scheduled_at, override }),
     }),
-  postNow: (id: number) => req<Draft>(`/drafts/${id}/post`, { method: "POST" }),
+  postNow: (id: number, override = false) =>
+    req<Draft>(`/drafts/${id}/post`, {
+      method: "POST",
+      body: JSON.stringify({ override }),
+    }),
 
   getStyle: () => req<{ guide_text: string; examples: string[] }>("/style"),
   putStyle: (guide_text: string) =>
@@ -109,6 +187,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ handle, max_total, is_self }),
     }),
+
+  recommendedTimes: () => req<RecommendedTimes>("/schedule/recommended"),
+
+  // 自分の直近投稿(キャッシュ読み) / Xから取得 / 通常リポスト
+  recentPosts: (days = 7) => req<RecentPost[]>(`/posts/recent?days=${days}`),
+  refreshPosts: (days = 7) =>
+    req<RecentPost[]>(`/posts/refresh?days=${days}`, { method: "POST" }),
+  repost: (
+    tweetId: string,
+    payload: { mode: "now" | "time"; scheduled_at?: string; text?: string; override?: boolean }
+  ) => req<Draft>(`/posts/${tweetId}/repost`, { method: "POST", body: JSON.stringify(payload) }),
+
+  // 制限時間帯(ブラックアウト)設定と判定
+  getBlackout: () => req<BlackoutSettings>("/schedule/blackout"),
+  putBlackout: (payload: Partial<BlackoutSettings>) =>
+    req<BlackoutSettings>("/schedule/blackout", { method: "PUT", body: JSON.stringify(payload) }),
+  blackoutStatus: (at?: string) =>
+    req<BlackoutStatus>(`/schedule/blackout/status${at ? `?at=${encodeURIComponent(at)}` : ""}`),
 
   cost: () => req<CostResponse>("/analytics/cost"),
   summary: () => req<SummaryResponse>("/analytics/summary"),

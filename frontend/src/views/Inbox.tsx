@@ -1,10 +1,26 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Badge, Button, Spinner } from "../components/ui";
-import { DraftCard, weighted } from "../components/DraftCard";
+import { DraftCard, charCount } from "../components/DraftCard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
+import { useBlackoutGate } from "../components/BlackoutGate";
+import { AgentHint } from "../components/AgentHint";
+import type { AgentPhrase } from "../components/AgentHint";
 import type { Draft, Me } from "../types";
+
+const AGENT_PHRASES: AgentPhrase[] = [
+  {
+    say: "このURLにこう絡んで",
+    does: "指定ツイートに自分の文でリプライ/引用する下書き(元ポスト本文付き)",
+    cmd: 'xagent reply <URL> "<返信文>"',
+  },
+  {
+    say: "絡み案を5件だけ生成して",
+    does: "1サイクルの生成数上限を5にして監視を1回実行(APIを圧迫しない)",
+    cmd: "xagent monitor-config --max 5 && xagent monitor-once",
+  },
+];
 
 function tweetUrl(me: Me | null, id: string): string {
   return me?.username ? `https://x.com/${me.username}/status/${id}` : `https://x.com/i/web/status/${id}`;
@@ -20,6 +36,7 @@ export default function Inbox({ me }: { me: Me | null }) {
   const [info, setInfo] = useState<string | null>(null);
   const [pending, setPending] = useState<Draft | null>(null);
   const toast = useToast();
+  const { gate, element: blackoutGate } = useBlackoutGate();
 
   function reload() {
     api
@@ -55,17 +72,23 @@ export default function Inbox({ me }: { me: Me | null }) {
     }
   }
 
-  async function confirmSend() {
+  // 「送信する」→ 制限帯ゲート(警告→最終確認)を通してから即時送信
+  function confirmSend() {
     if (!pending) return;
+    const draft = pending;
+    gate((override) => doSend(draft, override));
+  }
+
+  async function doSend(draft: Draft, override: boolean) {
     setSending(true);
     setError(null);
     try {
-      await api.approve(pending.id);
-      const posted = await api.postNow(pending.id);
+      await api.approve(draft.id);
+      const posted = await api.postNow(draft.id, override);
       if (posted.posted_tweet_id) {
         toast({
           tone: "success",
-          message: `${KIND_LABEL[pending.kind] ?? "投稿"}を送信しました。`,
+          message: `${KIND_LABEL[draft.kind] ?? "投稿"}を送信しました。`,
           href: tweetUrl(me, posted.posted_tweet_id),
           linkLabel: "投稿を開く",
         });
@@ -80,7 +103,7 @@ export default function Inbox({ me }: { me: Me | null }) {
     }
   }
 
-  const total = pending ? pending.segments.reduce((a, s) => a + weighted(s), 0) : 0;
+  const total = pending ? pending.segments.reduce((a, s) => a + charCount(s), 0) : 0;
 
   return (
     <div className="space-y-6">
@@ -95,6 +118,8 @@ export default function Inbox({ me }: { me: Me | null }) {
           {busy ? <Spinner /> : "監視を1回実行"}
         </Button>
       </div>
+
+      <AgentHint title="絡みをClaude Codeに任せる" phrases={AGENT_PHRASES} />
 
       {info && <div className="text-sm text-sky-300">{info}</div>}
       {error && <div className="text-sm text-red-300">エラー: {error}</div>}
@@ -138,7 +163,7 @@ export default function Inbox({ me }: { me: Me | null }) {
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs">
               <Badge tone="sky">{KIND_LABEL[pending.kind] ?? pending.kind}</Badge>
-              <span className="text-zinc-500">加重合計 {total}</span>
+              <span className="text-zinc-500">文字数合計 {total}</span>
             </div>
             {pending.segments.map((s, i) => (
               <div key={i} className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-sm">
@@ -148,6 +173,8 @@ export default function Inbox({ me }: { me: Me | null }) {
           </div>
         )}
       </ConfirmDialog>
+
+      {blackoutGate}
     </div>
   );
 }

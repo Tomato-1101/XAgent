@@ -19,9 +19,11 @@ class DraftRead(BaseModel):
     media_paths: list[str]
     target_tweet_id: str | None
     target_handle: str | None
+    target_text: str = ""  # 絡む相手の元ポスト本文(reply/quote/repost の表示用)
     scheduled_at: datetime | None
     posted_at: datetime | None
     posted_tweet_id: str | None
+    blackout_override: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -36,9 +38,11 @@ def draft_to_read(d: Draft) -> DraftRead:
         media_paths=json.loads(d.media_paths_json or "[]"),
         target_tweet_id=d.target_tweet_id,
         target_handle=d.target_handle,
+        target_text=d.target_text,
         scheduled_at=d.scheduled_at,
         posted_at=d.posted_at,
         posted_tweet_id=d.posted_tweet_id,
+        blackout_override=d.blackout_override,
         created_at=d.created_at,
         updated_at=d.updated_at,
     )
@@ -51,6 +55,37 @@ class ComposeRequest(BaseModel):
     media_paths: list[str] = []
     emulate_handle: str | None = None  # 真似るアカウント(学習済みのみ有効)
     n_variations: int = 1              # 1なら単発、2以上で言い回し違いをN案
+    raw: bool = False                  # Trueなら整形(LLM)せず入力をそのまま投稿
+
+
+class InterpretRequest(BaseModel):
+    text: str
+
+
+class InterpretResponse(BaseModel):
+    """自由文の指令解析結果(下書きは作らず、UIで確認するための情報)。"""
+
+    action: str  # "quote" | "post"
+    target_url: str | None
+    target_tweet_id: str | None
+    target_handle: str | None
+    body: str
+    raw: bool
+    note: str
+
+
+class CommandRequest(BaseModel):
+    """確認済みの指令から下書きを作るための入力。"""
+
+    action: str  # "quote" | "reply" | "post"
+    text: str    # 投稿本文(引用/返信なら自分のコメント)
+    target_tweet_id: str | None = None
+    target_handle: str | None = None
+    raw: bool = False
+    allow_long: bool = False
+    emulate_handle: str | None = None
+    media_paths: list[str] = []
+    style_guide: str | None = None
 
 
 class ProfileLearnRequest(BaseModel):
@@ -64,6 +99,7 @@ class MonitorSettingsRequest(BaseModel):
     manual_targets_enabled: bool | None = None
     keyword_search_enabled: bool | None = None
     following_enabled: bool | None = None
+    max_drafts_per_run: int | None = None  # 1監視サイクルの総生成数上限
 
 
 class UpdateDraftRequest(BaseModel):
@@ -74,6 +110,50 @@ class UpdateDraftRequest(BaseModel):
 class QueueRequest(BaseModel):
     mode: str = "optimal"  # "optimal" | "time"
     scheduled_at: datetime | None = None
+    override: bool = False  # 制限時間帯への予約を二段階確認で許可したか
+
+
+class PostNowRequest(BaseModel):
+    override: bool = False  # 制限時間帯でも投稿するか(二段階確認済み)
+
+
+# --- 自分の直近投稿 / リポスト ----------------------------------------------
+
+class RecentPost(BaseModel):
+    tweet_id: str
+    text: str
+    created_at: datetime | None
+    like_count: int
+    retweet_count: int
+    url: str
+
+
+class RepostRequest(BaseModel):
+    mode: str = "now"  # "now"=即時リポスト / "time"=指定時刻に予約
+    scheduled_at: datetime | None = None
+    text: str = ""     # 一覧表示用に元投稿本文の控え(任意)
+    override: bool = False
+
+
+# --- 制限時間帯(ブラックアウト) --------------------------------------------
+
+class BlackoutRead(BaseModel):
+    enabled: bool
+    weekdays: list[int]            # 月=0..日=6
+    windows: list[list[str]]       # [["09:00","12:00"], ...]
+    updated_at: datetime | None = None
+
+
+class BlackoutUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    weekdays: list[int] | None = None
+    windows: list[list[str]] | None = None
+
+
+class BlackoutStatus(BaseModel):
+    blackout: bool
+    reason: str
+    at: datetime  # 判定に使った時刻(naive UTC)
 
 
 class StyleRequest(BaseModel):

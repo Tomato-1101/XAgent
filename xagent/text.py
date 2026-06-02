@@ -23,11 +23,18 @@ _WEIGHT_1_RANGES: tuple[tuple[int, int], ...] = (
     (0x2032, 0x2037),  # プライム類
 )
 
-#: 標準ツイートの加重上限。日本語なら約140文字に相当。
+#: 標準ツイートの加重上限。X側の上限検証/表示の参考(Latin=1, CJK=2)。
 POST_LIMIT_WEIGHTED = 280
 
-#: タイムラインで「さらに表示」に折りたたまれない既定の閾値(=標準ツイート容量)。
+#: 加重ベースの折りたたみ閾値(=標準ツイート容量)。
 FOLD_THRESHOLD_WEIGHTED = 280
+
+#: 既定の1ツイート上限(字数=コードポイント数)。長文指定が無い限りこの範囲に収める。
+#: 「さらに表示」に折りたたまれないよう、日本語の字数で140を上限とする。
+POST_LIMIT_CHARS = 140
+
+#: タイムラインで「さらに表示」に折りたたまれない既定の閾値(字数)。
+FOLD_THRESHOLD_CHARS = 140
 
 
 def char_weight(codepoint: int) -> int:
@@ -39,13 +46,18 @@ def char_weight(codepoint: int) -> int:
 
 
 def weighted_length(text: str) -> int:
-    """Xの加重ルールでの文字数。URL短縮(t.co=23)は未考慮(生テキストの近似)。"""
+    """Xの加重ルールでの文字数(Latin=1, CJK/絵文字=2)。X側の上限検証や表示の参考に使う。"""
     return sum(char_weight(ord(ch)) for ch in text)
 
 
-def exceeds_fold(text: str, threshold: int = FOLD_THRESHOLD_WEIGHTED) -> bool:
-    """タイムラインで「さらに表示」に折りたたまれる長さかどうか。"""
-    return weighted_length(text) > threshold
+def char_length(text: str) -> int:
+    """字数(コードポイント数)。Xの「○字」表示に合わせた既定の計量。"""
+    return len(text)
+
+
+def exceeds_fold(text: str, threshold: int = FOLD_THRESHOLD_CHARS) -> bool:
+    """タイムラインで「さらに表示」に折りたたまれる字数かどうか(既定140字)。"""
+    return char_length(text) > threshold
 
 
 # 文末(日本語・英語)の直後で分割するための正規表現。区切り文字は前のセグメントに残す。
@@ -53,49 +65,37 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[。．！？!?\n])")
 
 
 def _hard_split(s: str, limit: int) -> list[str]:
-    """1文が上限を超える場合に、加重境界で強制分割する。"""
-    out: list[str] = []
-    cur = ""
-    w = 0
-    for ch in s:
-        cw = char_weight(ord(ch))
-        if w + cw > limit and cur:
-            out.append(cur)
-            cur, w = ch, cw
-        else:
-            cur += ch
-            w += cw
-    if cur:
-        out.append(cur)
-    return out
+    """1文が上限(字数)を超える場合に、文字境界で強制分割する。"""
+    return [s[i : i + limit] for i in range(0, len(s), limit)] if s else []
 
 
 def split_into_thread(
-    text: str, limit: int = POST_LIMIT_WEIGHTED, add_numbering: bool = False
+    text: str, limit: int = POST_LIMIT_CHARS, add_numbering: bool = False
 ) -> list[str]:
-    """長文を上限(加重)以内のセグメント列に分割してスレッド化する。
+    """長文を上限(字数)以内のセグメント列に分割してスレッド化する。
 
-    文末で優先的に区切り、1文が長すぎる場合のみ加重境界で強制分割する。
-    add_numbering=True で末尾に (i/n) を付与(番号分の加重は別途要考慮のため既定False)。
+    既定の上限は140字(長文指定が無いときの1ツイート上限)。文末で優先的に区切り、
+    1文が長すぎる場合のみ文字境界で強制分割する。
+    add_numbering=True で末尾に (i/n) を付与(番号分の字数は別途要考慮のため既定False)。
     """
     text = text.strip()
     if not text:
         return []
 
-    if weighted_length(text) <= limit:
+    if char_length(text) <= limit:
         segments = [text]
     else:
         pieces = [p for p in _SENTENCE_SPLIT.split(text) if p]
         segments = []
         cur = ""
         for piece in pieces:
-            if weighted_length(piece) > limit:
+            if char_length(piece) > limit:
                 if cur:
                     segments.append(cur)
                     cur = ""
                 segments.extend(_hard_split(piece, limit))
                 continue
-            if weighted_length(cur + piece) <= limit:
+            if char_length(cur + piece) <= limit:
                 cur += piece
             else:
                 if cur:

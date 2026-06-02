@@ -21,6 +21,14 @@ class PolicyViolation(Exception):
     """承認なし送信など、規約・安全方針に反する操作を弾く。"""
 
 
+class BlackoutViolation(PolicyViolation):
+    """制限時間帯(平日の指定帯)に、override なしで書き込もうとしたときに弾く。
+
+    PolicyViolation のサブクラスなので、スケジューラの据え置きやルートの409処理に乗る。
+    UI 側は事前に blackout/status を確認して二段階確認を出すため、これは最後の砦。
+    """
+
+
 class PostTrigger(str, Enum):
     """投稿の発火経路。投稿を許すのはこの2つだけ(認証 or 予約)。"""
 
@@ -30,12 +38,20 @@ class PostTrigger(str, Enum):
 
 # --- 承認ゲート(状態遷移) ---------------------------------------------------
 
+# CANCELED(取消/ゴミ箱)は未投稿のどの状態からでも入れる。投稿済みからは不可。
+# CANCELED からは DRAFT へ戻せる(ゴミ箱からの復元)。
 ALLOWED_TRANSITIONS: dict[DraftStatus, set[DraftStatus]] = {
-    DraftStatus.DRAFT: {DraftStatus.APPROVED, DraftStatus.REJECTED},
-    DraftStatus.APPROVED: {DraftStatus.QUEUED, DraftStatus.REJECTED},
-    DraftStatus.QUEUED: {DraftStatus.POSTED, DraftStatus.APPROVED, DraftStatus.REJECTED},
+    DraftStatus.DRAFT: {DraftStatus.APPROVED, DraftStatus.REJECTED, DraftStatus.CANCELED},
+    DraftStatus.APPROVED: {DraftStatus.QUEUED, DraftStatus.REJECTED, DraftStatus.CANCELED},
+    DraftStatus.QUEUED: {
+        DraftStatus.POSTED,
+        DraftStatus.APPROVED,
+        DraftStatus.REJECTED,
+        DraftStatus.CANCELED,
+    },
     DraftStatus.POSTED: set(),
-    DraftStatus.REJECTED: set(),
+    DraftStatus.REJECTED: {DraftStatus.CANCELED},
+    DraftStatus.CANCELED: {DraftStatus.DRAFT},
 }
 
 _POSTABLE = {DraftStatus.APPROVED, DraftStatus.QUEUED}
@@ -83,6 +99,17 @@ def ensure_post_authorized(
     if scheduled_at > now:
         raise PolicyViolation(
             f"予約時刻が未到来のため自動投稿しません (scheduled_at={scheduled_at})。"
+        )
+
+
+def ensure_not_blackout(in_blackout: bool, override: bool, reason: str = "") -> None:
+    """制限時間帯なら、override(二段階確認済み)が無い限り書き込みを拒否する。
+
+    override=True は「警告を無視→最終確認」を通したことを表す。
+    """
+    if in_blackout and not override:
+        raise BlackoutViolation(
+            (reason or "制限時間帯です。") + " 投稿するには警告を無視して最終確認してください。"
         )
 
 

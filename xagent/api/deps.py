@@ -40,3 +40,14 @@ def get_x_client() -> XClient:
         return XClient.from_settings(get_settings())
     except XClientError as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+
+def get_x_client_optional() -> XClient | None:
+    """資格情報が無くても 503 にせず None を返す Xクライアント依存。
+
+    元ポスト本文の取得など「取れたら使う」best-effort 用途。投稿系には get_x_client を使う。
+    """
+    try:
+        return XClient.from_settings(get_settings())
+    except XClientError:
+        return None

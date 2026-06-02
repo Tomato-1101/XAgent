@@ -6,6 +6,7 @@ import pytest
 from sqlmodel import Session, SQLModel, create_engine
 
 from xagent.formatter import FormatResult
+from xagent.models import BlackoutSettings
 
 
 @pytest.fixture
@@ -15,6 +16,10 @@ def session():
     )
     SQLModel.metadata.create_all(engine)
     with Session(engine) as s:
+        # 制限帯は既定で無効化(投稿系テストを実時刻に依存させない)。
+        # 制限帯テストは set_blackout_settings で明示的に有効化する。
+        s.add(BlackoutSettings(enabled=False))
+        s.commit()
         yield s
 
 
@@ -52,14 +57,16 @@ class FakeXClient:
     """投稿を記録し、連番IDを返す。読み取りは事前セットしたツイートを返す。"""
 
     def __init__(self, mentions=None, timelines=None, users=None, full_tweets=None,
-                 searches=None, following=None):
+                 searches=None, following=None, tweets=None):
         self.posted = []
+        self.retweeted = []
         self._mentions = mentions or []
         self._timelines = timelines or {}      # user_id -> list[dict]
         self._users = users or {}              # handle -> {id, username}
         self._full_tweets = full_tweets or {}  # user_id -> list[dict](created_at/metrics付)
         self._searches = searches or {}        # query -> list[dict]
         self._following = following or []      # list[{id, username}]
+        self._tweets = tweets or {}            # tweet_id -> {id, text, author_id, author_handle}
         self._counter = 1000
 
     def _next_id(self):
@@ -88,6 +95,10 @@ class FakeXClient:
             prev = ids[-1]
         return ids
 
+    def retweet(self, tweet_id):
+        self.retweeted.append(tweet_id)
+        return tweet_id
+
     def upload_media(self, path):
         return f"media-{path}"
 
@@ -111,6 +122,9 @@ class FakeXClient:
 
     def get_following(self, user_id, max_total=100):
         return list(self._following)[:max_total]
+
+    def get_tweet(self, tweet_id):
+        return self._tweets.get(str(tweet_id))
 
 
 @pytest.fixture

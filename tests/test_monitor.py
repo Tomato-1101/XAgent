@@ -67,3 +67,45 @@ def test_mentions_can_be_disabled(session, fake_formatter):
     monitor.set_monitor_settings(session, mentions_enabled=False)
     fx = FakeXClient(mentions=[{"id": "101", "text": "m", "author_id": "u1"}])
     assert monitor.run_once(session, fx, fake_formatter, me_user_id="me")["reply_suggestions"] == 0
+
+
+# --- 生成数バジェット(1サイクルの総生成数上限) ----------------------------
+
+def test_poll_mentions_stores_target_text(session, fake_formatter):
+    """メンション返信案にも元ポスト本文が target_text として残る。"""
+    fx = FakeXClient(mentions=[{"id": "101", "text": "メンション本文", "author_id": "u1"}])
+    monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me")
+    d = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).first()
+    assert d.target_text == "メンション本文"
+
+
+def test_max_drafts_per_run_caps_total(session, fake_formatter):
+    """max_drafts_per_run が監視1サイクルの総生成数を上限で打ち切る。"""
+    monitor.set_monitor_settings(session, max_drafts_per_run=3)
+    fx = FakeXClient(
+        mentions=[{"id": str(100 + i), "text": f"m{i}", "author_id": "u1"} for i in range(10)],
+    )
+    res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
+    assert res["reply_suggestions"] + res["quote_suggestions"] == 3
+    assert len(session.exec(select(Draft)).all()) == 3
+
+
+def test_budget_shared_across_sources(session, fake_formatter):
+    """バジェットはメンションと引用候補で共有され、合計が上限を超えない。"""
+    monitor.set_monitor_settings(session, max_drafts_per_run=2, keyword_search_enabled=True)
+    session.add(EngageTarget(kind=TargetKind.GENRE, keyword="AI", active=True))
+    session.commit()
+    fx = FakeXClient(
+        mentions=[{"id": "101", "text": "m", "author_id": "u1"}],
+        searches={"AI": [{"id": str(200 + i), "text": f"s{i}", "author_id": "u3"} for i in range(5)]},
+    )
+    res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
+    assert res["reply_suggestions"] == 1          # メンションで1消費
+    assert res["quote_suggestions"] == 1          # 残バジェット1のみ(5件中1件)
+
+
+def test_max_drafts_zero_creates_nothing(session, fake_formatter):
+    monitor.set_monitor_settings(session, max_drafts_per_run=0)
+    fx = FakeXClient(mentions=[{"id": "101", "text": "m", "author_id": "u1"}])
+    res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
+    assert res == {"reply_suggestions": 0, "quote_suggestions": 0}

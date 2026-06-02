@@ -5,22 +5,35 @@ import { ToastProvider } from "./components/Toast";
 import type { Me } from "./types";
 import Compose from "./views/Compose";
 import Queue from "./views/Queue";
+import Posts from "./views/Posts";
 import Inbox from "./views/Inbox";
 import Targets from "./views/Targets";
 import Style from "./views/Style";
 import Settings from "./views/Settings";
 import Analytics from "./views/Analytics";
+import Agent from "./views/Agent";
 
-type View = "compose" | "queue" | "inbox" | "targets" | "style" | "settings" | "analytics";
+type View =
+  | "compose"
+  | "queue"
+  | "posts"
+  | "inbox"
+  | "targets"
+  | "style"
+  | "settings"
+  | "analytics"
+  | "agent";
 
 const NAV: { key: View; label: string; desc: string }[] = [
   { key: "compose", label: "Compose", desc: "整形して下書き" },
   { key: "queue", label: "Queue", desc: "下書き・予約・投稿" },
+  { key: "posts", label: "Posts", desc: "直近投稿・リポスト" },
   { key: "inbox", label: "Inbox", desc: "返信/絡み案" },
   { key: "targets", label: "Targets", desc: "絡む対象" },
   { key: "style", label: "Style", desc: "口調・学習" },
-  { key: "settings", label: "Settings", desc: "監視トグル" },
+  { key: "settings", label: "Settings", desc: "監視・制限帯" },
   { key: "analytics", label: "Analytics", desc: "コスト/集計" },
+  { key: "agent", label: "Agent", desc: "Claude Codeに任せる" },
 ];
 
 export default function App() {
@@ -86,11 +99,13 @@ export default function App() {
           <div className="mx-auto max-w-3xl">
             {view === "compose" && <Compose />}
             {view === "queue" && <Queue me={me} />}
+            {view === "posts" && <Posts />}
             {view === "inbox" && <Inbox me={me} />}
             {view === "targets" && <Targets />}
             {view === "style" && <Style />}
             {view === "settings" && <Settings />}
             {view === "analytics" && <Analytics />}
+            {view === "agent" && <Agent />}
           </div>
         </main>
       </div>

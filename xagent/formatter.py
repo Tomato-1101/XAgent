@@ -44,6 +44,9 @@ class Formatter:
     ) -> None:
         self.settings = settings or get_settings()
         self._complete = complete or self._anthropic_complete
+        # この整形器インスタンスで消費した Claude トークン(コスト記録用に蓄積)
+        self.usage_input = 0
+        self.usage_output = 0
 
     def complete(self, system: str, user: str) -> str:
         """整形以外(プロファイル抽出等)でもLLMを使えるよう公開する。"""
@@ -63,6 +66,10 @@ class Formatter:
             system=system,
             messages=[{"role": "user", "content": user}],
         )
+        usage = getattr(msg, "usage", None)
+        if usage is not None:
+            self.usage_input += int(getattr(usage, "input_tokens", 0) or 0)
+            self.usage_output += int(getattr(usage, "output_tokens", 0) or 0)
         return "".join(
             getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text"
         ).strip()
@@ -75,7 +82,8 @@ class Formatter:
         emulate_examples: list[str] | None,
     ) -> str:
         length_rule = (
-            "1ツイートは加重280(日本語約140字)以内に必ず収める。長い場合は内容を絞る。"
+            "1ツイートは必ず140字(日本語の字数)以内に収める。改行・記号・スペースも字数に数える。"
+            "140字を1字でも超えてはいけない。収まらなければ内容を削って言い切る。スレッドにしない。"
             if not allow_long
             else "フックとして長文も可。冒頭で続きを読みたくなる書き出しにする。"
         )
@@ -159,7 +167,7 @@ class Formatter:
         system = f"""あなたは日本語Xアカウントの運用アシスタント。相手の投稿に対する自然で価値あるリプライ案を1つ作る。
 
 ルール:
-- 加重280(日本語約140字)以内。短く、相手に響く具体を添える。
+- 必ず140字(日本語の字数)以内。1字も超えない。短く、相手に響く具体を添える。
 - 媚びすぎ・定型の褒めだけは避け、会話が続く一言にする。本人の口調を保つ。
 - 出力はリプライ本文のみ。
 
@@ -179,7 +187,7 @@ class Formatter:
         system = f"""あなたは日本語Xアカウントの運用アシスタント。相手の投稿を引用RTする際の本文案を1つ作る。
 
 ルール:
-- 加重280(日本語約140字)以内。自分の視点・ノウハウを足して価値を上乗せする。
+- 必ず140字(日本語の字数)以内。1字も超えない。自分の視点・ノウハウを足して価値を上乗せする。
 - 単なる感想で終わらせず、フォロワーに学びがある切り口にする。本人の口調を保つ。
 - 出力は引用本文のみ。
 

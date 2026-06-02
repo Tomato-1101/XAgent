@@ -27,11 +27,15 @@ def get_monitor_settings(session: Session) -> MonitorSettings:
     return row
 
 
-def set_monitor_settings(session: Session, **flags: bool) -> MonitorSettings:
-    """トグルを更新する(指定キーのみ)。"""
+def set_monitor_settings(session: Session, **flags) -> MonitorSettings:
+    """監視設定を更新する(指定キーのみ)。トグルは bool、生成数上限は非負 int。"""
     row = get_monitor_settings(session)
     for k, v in flags.items():
-        if hasattr(row, k) and isinstance(v, bool):
+        if not hasattr(row, k):
+            continue
+        if k == "max_drafts_per_run" and isinstance(v, int) and not isinstance(v, bool):
+            setattr(row, k, max(0, v))
+        elif isinstance(v, bool):
             setattr(row, k, v)
     session.add(row)
     session.commit()
@@ -56,12 +60,28 @@ def _max_id(ids: list[str]) -> str | None:
     return str(max(nums)) if nums else None
 
 
+def _cap_oldest(tweets: list[dict], limit: int | None) -> list[dict]:
+    """生成数上限のため、処理するツイートを limit 件までに絞る。
+
+    超過時は古い順(id昇順)に limit 件だけ残す。残りはカーソルを進めないことで次サイクルに回り、
+    新着の取りこぼしを防ぐ(古い分から順に消化する)。limit=None なら全件(従来挙動)。
+    """
+    if limit is None or len(tweets) <= limit:
+        return tweets
+    if limit <= 0:
+        return []
+    return sorted(
+        tweets, key=lambda t: int(t["id"]) if str(t.get("id", "")).isdigit() else 0
+    )[:limit]
+
+
 def poll_mentions(
-    session: Session, x_client: XClient, formatter: Formatter, me_user_id: str
+    session: Session, x_client: XClient, formatter: Formatter, me_user_id: str,
+    limit: int | None = None,
 ) -> int:
-    """自分宛メンションを取得し、返信案の下書きを作る。生成件数を返す。"""
+    """自分宛メンションを取得し、返信案の下書きを作る。limit で生成件数を上限管理。生成件数を返す。"""
     cur = _get_cursor(session, "mentions")
-    tweets = x_client.get_mentions(me_user_id, since_id=cur.last_seen_id)
+    tweets = _cap_oldest(x_client.get_mentions(me_user_id, since_id=cur.last_seen_id), limit)
     created = 0
     for t in tweets:
         create_reply_draft(
@@ -77,9 +97,9 @@ def poll_mentions(
 
 
 def poll_targets(
-    session: Session, x_client: XClient, formatter: Formatter
+    session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
 ) -> int:
-    """手動リスト等(user_id付き・GENRE以外)の新規投稿→引用RT案。生成件数を返す。"""
+    """手動リスト等(user_id付き・GENRE以外)の新規投稿→引用RT案。limit は全対象で共有。生成件数を返す。"""
     targets = session.exec(
         select(EngageTarget).where(
             EngageTarget.active == True,  # noqa: E712
@@ -89,8 +109,13 @@ def poll_targets(
     ).all()
     created = 0
     for target in targets:
+        if limit is not None and created >= limit:
+            break
+        remaining = None if limit is None else limit - created
         cur = _get_cursor(session, f"target:{target.user_id}")
-        tweets = x_client.get_user_timeline(target.user_id, since_id=cur.last_seen_id)
+        tweets = _cap_oldest(
+            x_client.get_user_timeline(target.user_id, since_id=cur.last_seen_id), remaining
+        )
         for t in tweets:
             create_quote_draft(
                 session, formatter, t["id"], t.get("text", ""), target_handle=target.handle
@@ -104,8 +129,10 @@ def poll_targets(
     return created
 
 
-def poll_genre(session: Session, x_client: XClient, formatter: Formatter) -> int:
-    """ジャンル/キーワード探索(GENRE対象)→該当投稿に引用RT案。生成件数を返す。"""
+def poll_genre(
+    session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
+) -> int:
+    """ジャンル/キーワード探索(GENRE対象)→該当投稿に引用RT案。limit は全対象で共有。生成件数を返す。"""
     targets = session.exec(
         select(EngageTarget).where(
             EngageTarget.active == True,  # noqa: E712
@@ -115,8 +142,13 @@ def poll_genre(session: Session, x_client: XClient, formatter: Formatter) -> int
     ).all()
     created = 0
     for target in targets:
+        if limit is not None and created >= limit:
+            break
+        remaining = None if limit is None else limit - created
         cur = _get_cursor(session, f"genre:{target.keyword}")
-        tweets = x_client.search_recent(target.keyword, since_id=cur.last_seen_id)
+        tweets = _cap_oldest(
+            x_client.search_recent(target.keyword, since_id=cur.last_seen_id), remaining
+        )
         for t in tweets:
             create_quote_draft(
                 session, formatter, t["id"], t.get("text", ""),
@@ -132,17 +164,23 @@ def poll_genre(session: Session, x_client: XClient, formatter: Formatter) -> int
 
 
 def poll_following(
-    session: Session, x_client: XClient, formatter: Formatter, me_user_id: str
+    session: Session, x_client: XClient, formatter: Formatter, me_user_id: str,
+    limit: int | None = None,
 ) -> int:
-    """フォロー中アカウントの新規投稿→引用RT案。コスト高のため上限あり。生成件数を返す。"""
+    """フォロー中アカウントの新規投稿→引用RT案。limit は全対象で共有。生成件数を返す。"""
     following = x_client.get_following(me_user_id, max_total=FOLLOWING_MAX_ACCOUNTS)
     created = 0
     for user in following:
+        if limit is not None and created >= limit:
+            break
         uid = user.get("id")
         if not uid:
             continue
+        remaining = None if limit is None else limit - created
         cur = _get_cursor(session, f"follow:{uid}")
-        tweets = x_client.get_user_timeline(uid, since_id=cur.last_seen_id)
+        tweets = _cap_oldest(
+            x_client.get_user_timeline(uid, since_id=cur.last_seen_id), remaining
+        )
         for t in tweets:
             create_quote_draft(
                 session, formatter, t["id"], t.get("text", ""),
@@ -160,14 +198,28 @@ def poll_following(
 def run_once(
     session: Session, x_client: XClient, formatter: Formatter, me_user_id: str
 ) -> dict:
-    """1回分の監視サイクル。各ソースはトグル(MonitorSettings)で個別にオン/オフ。"""
+    """1回分の監視サイクル。各ソースはトグル(MonitorSettings)で個別にオン/オフ。
+
+    max_drafts_per_run を総生成数バジェットとして全ソースで共有し、一気に作りすぎてAPIを
+    圧迫しないようにする。バジェットを使い切ったら以降のソースはスキップする。
+    """
     cfg = get_monitor_settings(session)
-    replies = poll_mentions(session, x_client, formatter, me_user_id) if cfg.mentions_enabled else 0
+    budget = max(0, int(cfg.max_drafts_per_run or 0))
+    replies = 0
     quotes = 0
-    if cfg.manual_targets_enabled:
-        quotes += poll_targets(session, x_client, formatter)
-    if cfg.keyword_search_enabled:
-        quotes += poll_genre(session, x_client, formatter)
-    if cfg.following_enabled:
-        quotes += poll_following(session, x_client, formatter, me_user_id)
+    if cfg.mentions_enabled and budget > 0:
+        replies = poll_mentions(session, x_client, formatter, me_user_id, limit=budget)
+        budget -= replies
+    if cfg.manual_targets_enabled and budget > 0:
+        c = poll_targets(session, x_client, formatter, limit=budget)
+        quotes += c
+        budget -= c
+    if cfg.keyword_search_enabled and budget > 0:
+        c = poll_genre(session, x_client, formatter, limit=budget)
+        quotes += c
+        budget -= c
+    if cfg.following_enabled and budget > 0:
+        c = poll_following(session, x_client, formatter, me_user_id, limit=budget)
+        quotes += c
+        budget -= c
     return {"reply_suggestions": replies, "quote_suggestions": quotes}

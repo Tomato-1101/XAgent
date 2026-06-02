@@ -19,7 +19,8 @@ def _utcnow() -> datetime:
 class DraftKind(str, Enum):
     POST = "post"      # 通常投稿(スレッド可)
     REPLY = "reply"    # 自分宛/対象へのリプライ
-    QUOTE = "quote"    # 引用RT
+    QUOTE = "quote"    # 引用RT(他人の投稿にコメントを付けて拡散)
+    REPOST = "repost"  # 通常リポスト(コメント無し)。自分の過去投稿の再拡散に使う
 
 
 class DraftStatus(str, Enum):
@@ -28,6 +29,7 @@ class DraftStatus(str, Enum):
     QUEUED = "queued"      # 投稿キュー(予約/最適時間待ち)
     POSTED = "posted"      # 投稿済み
     REJECTED = "rejected"  # 却下
+    CANCELED = "canceled"  # 取消(ゴミ箱)。DBには残し、容量超過時に古い順で物理削除する
 
 
 class Draft(SQLModel, table=True):
@@ -37,16 +39,23 @@ class Draft(SQLModel, table=True):
     kind: DraftKind = DraftKind.POST
     status: DraftStatus = DraftStatus.DRAFT
 
-    source_text: str = ""                 # ユーザーが投げた元テキスト(整形前)
+    source_text: str = ""                 # 自分(ユーザー/エージェント)の入力(整形前の種)
     segments_json: str = "[]"             # 整形後のセグメント(スレッド)をJSON配列で保持
     media_paths_json: str = "[]"          # 添付画像のローカルパス(任意)
 
-    target_tweet_id: str | None = None    # reply/quote の対象ツイートID
+    target_tweet_id: str | None = None    # reply/quote/repost の対象ツイートID
     target_handle: str | None = None      # 表示用
+    # 絡む相手の元ポスト本文。reply/quote/repost で「何に対してか」を人間が判断するために保持する。
+    # source_text(自分の入力)とは別物。自動生成(monitor)・URL指定の絡みで取得して入れる。
+    target_text: str = ""
 
     scheduled_at: datetime | None = None  # 指定時刻/最適時間の予約
     posted_at: datetime | None = None
     posted_tweet_id: str | None = None
+
+    # 制限時間帯(平日の指定帯)でも投稿してよいか。二段階確認(警告を無視→最終確認)で True にする。
+    # 予約投稿はUIから人がいない時刻に発火するため、許可をこの列に保存しておく。
+    blackout_override: bool = False
 
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
@@ -139,13 +148,33 @@ class MonitorSettings(SQLModel, table=True):
     manual_targets_enabled: bool = True
     keyword_search_enabled: bool = False
     following_enabled: bool = False
+    # 1監視サイクルで作る下書きの総数上限。一気に生成しすぎてAPIを圧迫しないための安全弁。
+    max_drafts_per_run: int = 10
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class BlackoutSettings(SQLModel, table=True):
+    """投稿/リポスト等の自分の書き込みを禁止する時間帯(制限帯)の設定。
+
+    単一行(id=1)。指定曜日(既定 月〜金)の指定時間帯(JST)は、自分の公開書き込みを
+    一切ブロックする。土日は既定で対象外。監視(読み取り)はブロックしない。
+    二段階確認(警告を無視→最終確認)を通した操作だけ override で投稿できる。
+    weekdays_json: 制限する曜日(月=0..日=6)のJSON配列。
+    windows_json: [["HH:MM","HH:MM"], ...] のJSON配列(その日の制限時間帯)。
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    enabled: bool = True
+    weekdays_json: str = "[0, 1, 2, 3, 4]"  # 月〜金
+    windows_json: str = '[["09:00", "12:00"], ["13:00", "19:00"]]'
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
 class CostKind(str, Enum):
-    READ = "read"    # $0.005/件
-    WRITE = "write"  # $0.01/件
-    TL = "tl"        # $0.01/件 (timeline lookup)
+    READ = "read"    # X API 読み取り $0.005/件
+    WRITE = "write"  # X API 投稿 $0.01/件
+    TL = "tl"        # X API タイムライン取得 $0.01/件
+    LLM = "llm"      # Claude(Anthropic) API。トークン課金。cost_usd に実額を入れる
 
 
 class ApiCostLog(SQLModel, table=True):

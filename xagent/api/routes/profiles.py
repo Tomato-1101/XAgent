@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
 from ... import profiles as profiles_mod
+from ...cost import bill_formatter_usage
 from ...formatter import Formatter
 from ...models import AccountProfile
 from ...x_client import XClient
@@ -32,7 +33,7 @@ def learn(
     formatter: Formatter = Depends(get_formatter),
 ) -> AccountProfile:
     try:
-        return profiles_mod.learn_account(
+        prof = profiles_mod.learn_account(
             session,
             x_client,
             formatter.complete,
@@ -42,3 +43,7 @@ def learn(
         )
     except ValueError as e:
         raise HTTPException(404, str(e))
+    # 特徴抽出で使った Claude トークンをコスト記録
+    if bill_formatter_usage(session, formatter, note="learn-profile") is not None:
+        session.commit()
+    return prof

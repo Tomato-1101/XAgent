@@ -28,28 +28,37 @@ def get_engine():
 
 
 # 既存DBに後から増えた列(SQLModel.create_all は ALTER しない)を冪等に追加する。
-# (テーブル名, 列名, SQLite型, デフォルト句)
-_PASTPOST_ADDED_COLUMNS = [
-    ("author_user_id", "VARCHAR", ""),
-    ("author_handle", "VARCHAR", ""),
-    ("is_own", "BOOLEAN", "DEFAULT 1"),
-]
+# {テーブル名: [(列名, SQLite型, デフォルト句), ...]}
+_ADDED_COLUMNS = {
+    "pastpost": [
+        ("author_user_id", "VARCHAR", ""),
+        ("author_handle", "VARCHAR", ""),
+        ("is_own", "BOOLEAN", "DEFAULT 1"),
+    ],
+    "draft": [
+        ("blackout_override", "BOOLEAN", "DEFAULT 0"),
+        ("target_text", "VARCHAR", "DEFAULT ''"),
+    ],
+    "monitorsettings": [
+        ("max_drafts_per_run", "INTEGER", "DEFAULT 10"),
+    ],
+}
 
 
 def _migrate(engine) -> None:
     """既存テーブルへの列追加マイグレーション(冪等)。新規テーブルは create_all が作る。"""
-    inspector_sql = "PRAGMA table_info(pastpost)"
     with engine.begin() as conn:
-        rows = conn.execute(text(inspector_sql)).fetchall()
-        if not rows:
-            return  # pastpost 自体が無い(新規DB)→ create_all 済みなので追加不要
-        existing = {r[1] for r in rows}  # r[1] = column name
-        for col, sqltype, default in _PASTPOST_ADDED_COLUMNS:
-            if col not in existing:
-                clause = f" {default}" if default else ""
-                conn.execute(
-                    text(f"ALTER TABLE pastpost ADD COLUMN {col} {sqltype}{clause}")
-                )
+        for table, columns in _ADDED_COLUMNS.items():
+            rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            if not rows:
+                continue  # テーブルが無い(新規DB)→ create_all 済みなので追加不要
+            existing = {r[1] for r in rows}  # r[1] = column name
+            for col, sqltype, default in columns:
+                if col not in existing:
+                    clause = f" {default}" if default else ""
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {col} {sqltype}{clause}")
+                    )
 
 
 def init_db() -> None:
