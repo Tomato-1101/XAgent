@@ -6,6 +6,7 @@ import type {
   Draft,
   DraftStatus,
   Interpreted,
+  ListCreateResult,
   Me,
   MediaItem,
   MonitorSettings,
@@ -14,6 +15,8 @@ import type {
   RecommendedTimes,
   SummaryResponse,
   Target,
+  XList,
+  XListMember,
 } from "./types";
 
 const BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
@@ -208,4 +211,21 @@ export const api = {
 
   cost: () => req<CostResponse>("/analytics/cost"),
   summary: () => req<SummaryResponse>("/analytics/summary"),
+
+  // Xネイティブ「リスト」: 一覧/メンバー(読取) と 作成/更新/削除/メンバー編集(書込=公式API)
+  lists: () => req<XList[]>("/lists"),
+  listMembers: (id: string) => req<XListMember[]>(`/lists/${id}/members`),
+  createList: (payload: {
+    name: string;
+    accounts: string[];
+    description?: string;
+    private?: boolean;
+  }) => req<ListCreateResult>("/lists", { method: "POST", body: JSON.stringify(payload) }),
+  updateList: (id: string, patch: { name?: string; description?: string; private?: boolean }) =>
+    req<void>(`/lists/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteList: (id: string) => req<void>(`/lists/${id}`, { method: "DELETE" }),
+  addListMember: (id: string, body: { handle?: string; user_id?: string }) =>
+    req<void>(`/lists/${id}/members`, { method: "POST", body: JSON.stringify(body) }),
+  removeListMember: (id: string, userId: string) =>
+    req<void>(`/lists/${id}/members/${userId}`, { method: "DELETE" }),
 };

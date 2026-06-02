@@ -148,3 +148,29 @@ export interface BlackoutStatus {
   reason: string;
   at: string;
 }
+
+// Xネイティブの「リスト」
+export interface XList {
+  id: string;
+  name: string;
+  description: string;
+  private: boolean;
+  member_count: number;
+}
+
+export interface XListMember {
+  id: string;
+  username: string | null;
+  name: string | null;
+  description: string;
+  profile_image_url: string | null;
+  followers_count: number;
+}
+
+export interface ListCreateResult {
+  list_id: string;
+  url: string;
+  name: string;
+  added: string[];
+  skipped: { handle: string; reason: string }[];
+}

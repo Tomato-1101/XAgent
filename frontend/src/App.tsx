@@ -8,6 +8,7 @@ import Queue from "./views/Queue";
 import Posts from "./views/Posts";
 import Inbox from "./views/Inbox";
 import Targets from "./views/Targets";
+import Lists from "./views/Lists";
 import Style from "./views/Style";
 import Settings from "./views/Settings";
 import Analytics from "./views/Analytics";
@@ -19,6 +20,7 @@ type View =
   | "posts"
   | "inbox"
   | "targets"
+  | "lists"
   | "style"
   | "settings"
   | "analytics"
@@ -30,6 +32,7 @@ const NAV: { key: View; label: string; desc: string }[] = [
   { key: "posts", label: "Posts", desc: "直近投稿・リポスト" },
   { key: "inbox", label: "Inbox", desc: "返信/絡み案" },
   { key: "targets", label: "Targets", desc: "絡む対象" },
+  { key: "lists", label: "Lists", desc: "Xリスト管理" },
   { key: "style", label: "Style", desc: "口調・学習" },
   { key: "settings", label: "Settings", desc: "監視・制限帯" },
   { key: "analytics", label: "Analytics", desc: "コスト/集計" },
@@ -102,6 +105,7 @@ export default function App() {
             {view === "posts" && <Posts />}
             {view === "inbox" && <Inbox me={me} />}
             {view === "targets" && <Targets />}
+            {view === "lists" && <Lists />}
             {view === "style" && <Style />}
             {view === "settings" && <Settings />}
             {view === "analytics" && <Analytics />}
