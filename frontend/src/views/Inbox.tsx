@@ -130,6 +130,10 @@ export default function Inbox({ me }: { me: Me | null }) {
           <DraftCard
             key={d.id}
             draft={d}
+            onUpdated={() => {
+              toast({ tone: "success", message: "案を更新しました。" });
+              reload();
+            }}
             actions={
               <>
                 <Button size="sm" variant="danger" onClick={() => setPending(d)}>

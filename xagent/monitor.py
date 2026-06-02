@@ -85,7 +85,8 @@ def poll_mentions(
     created = 0
     for t in tweets:
         create_reply_draft(
-            session, formatter, t["id"], t.get("text", ""), target_handle=t.get("author_id")
+            session, formatter, t["id"], t.get("text", ""),
+            target_handle=t.get("author_id"), target_created_at=t.get("created_at"),
         )
         created += 1
     new_max = _max_id([t["id"] for t in tweets])
@@ -118,7 +119,8 @@ def poll_targets(
         )
         for t in tweets:
             create_quote_draft(
-                session, formatter, t["id"], t.get("text", ""), target_handle=target.handle
+                session, formatter, t["id"], t.get("text", ""),
+                target_handle=target.handle, target_created_at=t.get("created_at"),
             )
             created += 1
         new_max = _max_id([t["id"] for t in tweets])
@@ -152,7 +154,7 @@ def poll_genre(
         for t in tweets:
             create_quote_draft(
                 session, formatter, t["id"], t.get("text", ""),
-                target_handle=t.get("author_id"),
+                target_handle=t.get("author_id"), target_created_at=t.get("created_at"),
             )
             created += 1
         new_max = _max_id([t["id"] for t in tweets])
@@ -184,7 +186,7 @@ def poll_following(
         for t in tweets:
             create_quote_draft(
                 session, formatter, t["id"], t.get("text", ""),
-                target_handle=user.get("username"),
+                target_handle=user.get("username"), target_created_at=t.get("created_at"),
             )
             created += 1
         new_max = _max_id([t["id"] for t in tweets])

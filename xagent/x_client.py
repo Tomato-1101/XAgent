@@ -43,6 +43,7 @@ def _normalize_tweets(resp: Any) -> list[dict]:
                 "author_id": (
                     str(t.author_id) if getattr(t, "author_id", None) else None
                 ),
+                "created_at": getattr(t, "created_at", None),  # 元投稿の投稿時刻(tweet_fieldsで要求)
             }
         )
     return out
@@ -270,7 +271,7 @@ class XClient:
     def _official_get_tweet(self, tweet_id: str) -> dict | None:
         resp = self._client.get_tweet(
             id=tweet_id,
-            tweet_fields=["author_id"],
+            tweet_fields=["author_id", "created_at"],
             expansions=["author_id"],
             user_fields=["username"],
         )
@@ -285,6 +286,7 @@ class XClient:
             "text": getattr(data, "text", ""),
             "author_id": str(data.author_id) if getattr(data, "author_id", None) else None,
             "author_handle": author_handle,
+            "created_at": getattr(data, "created_at", None),
         }
 
     def get_mentions(self, user_id: str, since_id: str | None = None) -> list[dict]:
@@ -302,7 +304,7 @@ class XClient:
 
     def _official_get_mentions(self, user_id: str, since_id: str | None = None) -> list[dict]:
         resp = self._client.get_users_mentions(
-            id=user_id, since_id=since_id, tweet_fields=["author_id"]
+            id=user_id, since_id=since_id, tweet_fields=["author_id", "created_at"]
         )
         return _normalize_tweets(resp)
 
@@ -315,7 +317,7 @@ class XClient:
 
     def _official_get_user_timeline(self, user_id: str, since_id: str | None = None) -> list[dict]:
         resp = self._client.get_users_tweets(
-            id=user_id, since_id=since_id, tweet_fields=["author_id"]
+            id=user_id, since_id=since_id, tweet_fields=["author_id", "created_at"]
         )
         return _normalize_tweets(resp)
 
@@ -328,7 +330,7 @@ class XClient:
 
     def _official_search_recent(self, query: str, since_id: str | None = None) -> list[dict]:
         resp = self._client.search_recent_tweets(
-            query=query, since_id=since_id, tweet_fields=["author_id"]
+            query=query, since_id=since_id, tweet_fields=["author_id", "created_at"]
         )
         return _normalize_tweets(resp)
 

@@ -190,6 +190,7 @@ def create_reply_draft(
     target_tweet_id: str,
     target_text: str,
     target_handle: str | None = None,
+    target_created_at: datetime | None = None,
 ) -> Draft:
     res = formatter.generate_reply(
         target_text, target_handle or "", active_style_guide(session),
@@ -202,6 +203,7 @@ def create_reply_draft(
         target_tweet_id=target_tweet_id,
         target_handle=target_handle,
         target_text=target_text,  # 元ポスト本文を表示用に保持(人間が承認判断できるように)
+        target_created_at=to_naive_utc(target_created_at),  # 元投稿の投稿時刻(取得できた時のみ)
     )
     return _finalize_draft(session, formatter, draft, "reply")
 
@@ -212,6 +214,7 @@ def create_quote_draft(
     target_tweet_id: str,
     target_text: str,
     target_handle: str | None = None,
+    target_created_at: datetime | None = None,
 ) -> Draft:
     res = formatter.generate_quote(
         target_text, target_handle or "", active_style_guide(session),
@@ -224,6 +227,7 @@ def create_quote_draft(
         target_tweet_id=target_tweet_id,
         target_handle=target_handle,
         target_text=target_text,  # 引用元の本文を表示用に保持
+        target_created_at=to_naive_utc(target_created_at),  # 引用元の投稿時刻(取得できた時のみ)
     )
     return _finalize_draft(session, formatter, draft, "quote")
 
@@ -258,6 +262,7 @@ def create_quote_command_draft(
     comment: str,
     target_handle: str | None = None,
     target_text: str = "",
+    target_created_at: datetime | None = None,
     raw: bool = False,
     style_guide: str | None = None,
     allow_long: bool = False,
@@ -292,6 +297,7 @@ def create_quote_command_draft(
         target_tweet_id=target_tweet_id,
         target_handle=target_handle,
         target_text=target_text,
+        target_created_at=to_naive_utc(target_created_at),
     )
     return _finalize_draft(session, formatter, draft, "command-quote")
 
@@ -303,6 +309,7 @@ def create_reply_command_draft(
     comment: str,
     target_handle: str | None = None,
     target_text: str = "",
+    target_created_at: datetime | None = None,
     raw: bool = False,
     style_guide: str | None = None,
     allow_long: bool = False,
@@ -337,6 +344,7 @@ def create_reply_command_draft(
         target_tweet_id=target_tweet_id,
         target_handle=target_handle,
         target_text=target_text,
+        target_created_at=to_naive_utc(target_created_at),
     )
     return _finalize_draft(session, formatter, draft, "command-reply")
 
@@ -346,6 +354,7 @@ def create_repost_draft(
     target_tweet_id: str,
     target_text: str = "",
     target_handle: str | None = None,
+    target_created_at: datetime | None = None,
 ) -> Draft:
     """自分の投稿の通常リポスト(コメント無し)の下書きを作る。整形(LLM)は不要。
 
@@ -359,6 +368,7 @@ def create_repost_draft(
         target_tweet_id=target_tweet_id,
         target_handle=target_handle,
         target_text=target_text,
+        target_created_at=to_naive_utc(target_created_at),
     )
     session.add(draft)
     session.commit()

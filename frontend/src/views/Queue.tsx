@@ -264,6 +264,7 @@ export default function Queue({ me }: { me: Me | null }) {
           <DraftCard
             key={d.id}
             draft={d}
+            onUpdated={reload}
             actions={
               <>
                 {d.status === "draft" && (

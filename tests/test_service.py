@@ -46,6 +46,21 @@ def test_quote_uses_quote_id(session, fake_formatter, fake_x):
     assert fake_x.posted[0]["quote"] == "777"
 
 
+def test_target_created_at_stored_naive_utc(session, fake_formatter):
+    """元投稿の投稿時刻(aware)を渡すと naive UTC で保持され、表示・鮮度判断に使える。"""
+    from datetime import timezone
+
+    aware = datetime(2026, 6, 1, 12, 0, tzinfo=timezone(timedelta(hours=9)))  # JST 12:00
+    d = service.create_quote_draft(
+        session, fake_formatter, "777", "元投稿", "famous", target_created_at=aware
+    )
+    assert d.target_created_at == datetime(2026, 6, 1, 3, 0)  # UTC・tzなし
+    assert d.target_created_at.tzinfo is None
+    # 渡さなければ None(取得できなかった旧データ等)
+    d2 = service.create_quote_draft(session, fake_formatter, "778", "元投稿2", "famous")
+    assert d2.target_created_at is None
+
+
 def test_rate_limit_min_interval_blocks(session, fake_formatter, fake_x):
     now = datetime(2026, 5, 30, 12, 0, 0)
     # 1件目を投稿

@@ -85,6 +85,7 @@ class TwitterApiIoClient:
             "text": t.get("text", ""),
             "author_id": str(author.get("id")) if author.get("id") else None,
             "author_handle": author.get("userName"),
+            "created_at": _parse_created_at(t.get("createdAt")),  # 元投稿の投稿時刻(表示・鮮度判断用)
         }
 
     @staticmethod

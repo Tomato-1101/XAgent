@@ -48,6 +48,8 @@ class Draft(SQLModel, table=True):
     # 絡む相手の元ポスト本文。reply/quote/repost で「何に対してか」を人間が判断するために保持する。
     # source_text(自分の入力)とは別物。自動生成(monitor)・URL指定の絡みで取得して入れる。
     target_text: str = ""
+    # 元ポストが投稿された時刻(naive UTC)。取得できた時のみ。案の鮮度判断に使う(古い投稿への絡みは効果が薄い)。
+    target_created_at: datetime | None = None
 
     scheduled_at: datetime | None = None  # 指定時刻/最適時間の予約
     posted_at: datetime | None = None

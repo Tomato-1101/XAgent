@@ -36,11 +36,23 @@ def test_get_tweet_normalizes_and_sends_key(monkeypatch):
         seen["key"] = request.headers.get("X-API-Key")
         seen["path"] = request.url.path
         seen["tweet_ids"] = request.url.params.get("tweet_ids")
-        return httpx.Response(200, json={"tweets": [_tweet(123, "やあ")], "status": "success"})
+        return httpx.Response(
+            200,
+            json={
+                "tweets": [_tweet(123, "やあ", createdAt="Wed Oct 10 20:19:24 +0000 2018")],
+                "status": "success",
+            },
+        )
 
     c = _client_with(monkeypatch, handler)
     out = c.get_tweet("123")
-    assert out == {"id": "123", "text": "やあ", "author_id": "9", "author_handle": "someone"}
+    assert out == {
+        "id": "123",
+        "text": "やあ",
+        "author_id": "9",
+        "author_handle": "someone",
+        "created_at": tac._parse_created_at("Wed Oct 10 20:19:24 +0000 2018"),
+    }
     assert seen["key"] == "test-key"
     assert seen["path"] == "/twitter/tweets"
     assert seen["tweet_ids"] == "123"

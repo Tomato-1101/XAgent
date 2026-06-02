@@ -18,8 +18,11 @@ class _FakeTweepy:
 
 
 def test_get_tweet_normalizes_response():
+    from datetime import datetime, timezone
+
+    created = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
     resp = SimpleNamespace(
-        data=SimpleNamespace(id=123, text="本文", author_id=999),
+        data=SimpleNamespace(id=123, text="本文", author_id=999, created_at=created),
         includes={"users": [SimpleNamespace(username="famous")]},
     )
     fake = _FakeTweepy(resp)
@@ -29,9 +32,12 @@ def test_get_tweet_normalizes_response():
         "text": "本文",
         "author_id": "999",
         "author_handle": "famous",
+        "created_at": created,
     }
     # ハンドル取得のため expansions/user_fields を渡している
     assert fake.calls[0]["expansions"] == ["author_id"]
+    # 投稿時刻を取るため tweet_fields に created_at を要求している
+    assert "created_at" in fake.calls[0]["tweet_fields"]
 
 
 def test_get_tweet_returns_none_when_no_data():

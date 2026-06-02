@@ -30,17 +30,17 @@ from ..schemas import (
 )
 
 
-def _fetch_target(x_client: XClient | None, tweet_id: str | None) -> tuple[str, str | None]:
-    """対象ツイートの本文とハンドルを best-effort で取得する。取れなければ ("", None)。"""
+def _fetch_target(x_client: XClient | None, tweet_id: str | None):
+    """対象ツイートの本文・ハンドル・投稿時刻を best-effort で取得。取れなければ ("", None, None)。"""
     if not (x_client and tweet_id):
-        return "", None
+        return "", None, None
     try:
         t = x_client.get_tweet(tweet_id)
     except Exception:
-        return "", None
+        return "", None, None
     if not t:
-        return "", None
-    return t.get("text", ""), t.get("author_handle")
+        return "", None, None
+    return t.get("text", ""), t.get("author_handle"), t.get("created_at")
 
 router = APIRouter(prefix="/compose", tags=["compose"], dependencies=[Depends(require_api_token)])
 
@@ -189,7 +189,9 @@ def command(
         if req.action in ("quote", "reply"):
             if not req.target_tweet_id:
                 raise HTTPException(400, "引用/返信には対象ツイート(URL/ID)が必要です。")
-            target_text, target_handle = _fetch_target(x_client, req.target_tweet_id)
+            target_text, target_handle, target_created_at = _fetch_target(
+                x_client, req.target_tweet_id
+            )
             maker = (
                 service.create_quote_command_draft
                 if req.action == "quote"
@@ -202,6 +204,7 @@ def command(
                 req.text,
                 target_handle=req.target_handle or target_handle,
                 target_text=target_text,
+                target_created_at=target_created_at,
                 raw=req.raw,
                 style_guide=req.style_guide,
                 allow_long=req.allow_long,
