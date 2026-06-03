@@ -145,31 +145,25 @@ export default function Settings() {
         )}
       </Card>
 
-      {/* 自動運用(常駐デーモン)のオン/オフ */}
+      {/* 絡み案の自動生成のオン/オフ(常駐APIに統合済み) */}
       <Card className="space-y-1">
         <div className="flex items-center justify-between">
-          <div className="text-sm text-zinc-400">自動運用（常駐デーモン）</div>
+          <div className="text-sm text-zinc-400">絡み案の自動生成</div>
           {saving && <Spinner />}
         </div>
         {settings ? (
           <>
             <Switch
-              label="自動監視（絡み案を自動生成）"
-              hint="定期的に監視を回し、返信案・絡み案を自動で下書き生成する"
+              label="絡み案を自動生成する"
+              hint="定期的に監視を回し、返信案・絡み案を自動で下書き生成する（下書きのみ・自動投稿はしない）"
               checked={Boolean(settings.auto_monitor_enabled)}
               disabled={saving}
               onChange={(v) => toggle("auto_monitor_enabled", v)}
             />
-            <Switch
-              label="予約投稿の自動実行"
-              hint="予約した時刻に自動でXへ投稿する（承認済みの予約のみ・即時投稿は別）"
-              checked={Boolean(settings.auto_post_enabled)}
-              disabled={saving}
-              onChange={(v) => toggle("auto_post_enabled", v)}
-            />
             <p className="pt-1 text-xs text-zinc-500">
-              これは常駐デーモンの動作スイッチです。OFFにするとデーモンを止めずに該当処理だけ一時停止します。
-              デーモン自体は <code className="text-zinc-400">xagent daemon</code> で起動・Ctrl-Cで停止します。
+              このスイッチは絡み案の自動生成だけを制御します。OFFにするとAPIを消費しません（生成したい時だけON）。
+              予約投稿の発火は常時自動で動くため、ここでは止められません（全投稿の緊急停止はサーバ側の posting_enabled）。
+              常駐APIに統合済みなので、別途デーモンを起動する必要はありません。
             </p>
           </>
         ) : (

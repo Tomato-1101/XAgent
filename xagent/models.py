@@ -182,8 +182,10 @@ class MonitorSettings(SQLModel, table=True):
     following_enabled: bool = False
     # 常駐デーモンの自動実行スイッチ。Falseにすると、プロセスは動いていても各ティックが
     # その処理をスキップする(=デーモンを止めずにUIから一時停止/再開できる)。
-    auto_monitor_enabled: bool = True   # 監視ティック(絡み案の自動生成)を動かすか
-    auto_post_enabled: bool = True      # キューティック(予約分の自動投稿)を動かすか
+    auto_monitor_enabled: bool = True   # 監視ティック(絡み案の自動生成)を動かすか。UIのトグルで制御
+    # 予約投稿は常時実行する方針のため現在は未使用(緊急停止は config.posting_enabled が担う)。
+    # 互換のため列は残す。
+    auto_post_enabled: bool = True
     # 1監視サイクルで作る下書きの総数上限。一気に生成しすぎてAPIを圧迫しないための安全弁。
     max_drafts_per_run: int = 10
     updated_at: datetime = Field(default_factory=_utcnow)

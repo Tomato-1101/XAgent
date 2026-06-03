@@ -42,16 +42,18 @@ def monitor_tick() -> None:
 
 
 def queue_tick() -> None:
+    # 予約投稿の発火は常時動かす(ユーザー方針: 予約投稿は止めない)。
+    # 全投稿の緊急停止は config.posting_enabled が、個別の制限帯/頻度ガードは process_due_queue が担う。
     try:
         with get_session() as s:
-            if not get_monitor_settings(s).auto_post_enabled:
-                return
             x = XClient.from_settings()
             res = process_due_queue(s, x)
             if res["posted"]:
                 log.info("queue_tick posted: %s", res["posted"])
             if res["skipped"]:
                 log.info("queue_tick skipped(ガード): %s", res["skipped"])
+            if res.get("missed"):
+                log.info("queue_tick missed(時刻超過→承認済みへ失効): %s", res["missed"])
     except XClientError as e:
         log.warning("queue_tick: X資格情報未設定 (%s)", e)
     except Exception:
