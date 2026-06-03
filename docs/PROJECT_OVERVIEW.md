@@ -454,7 +454,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 | メソッド | パス | 用途 |
 |---|---|---|
-| POST | `/monitor/run-once` | 監視を1サイクル実行(`run_once` の戻り) |
+| POST | `/monitor/run-once` | 監視を1サイクル実行(`run_once` の戻り)。`?limit=N` でその回だけ生成数を N 件までに絞る(乱造防止) |
 | GET | `/monitor/settings` | 監視設定取得 |
 | PUT | `/monitor/settings` | 監視設定更新(None 以外のフラグのみ部分更新) |
 
@@ -538,7 +538,7 @@ Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯�
 | 画面 | 用途 | 主操作 |
 |---|---|---|
 | **Compose** | 思いつきを整形して下書き化 | ライブプレビュー(400msデバウンス)、メディア添付(画像4/動画1/混在不可)、emulate選択、案の数(1〜4)、型選択(既定`auto`)、長文許可/raw。指令マーカー(URL or「そのまま」等)があれば「指令を解析」→ confirm → command |
-| **Inbox** | メンション返信案・絡み案の承認/編集/送信 | `kind !== "post"` のみ表示し、性質が違うので**返信案(sky)と引用案/引用RT(violet)に分けて表示**(`kind==="reply"`/`"quote"`)。「監視を1回実行」、各案を「承認して送信」(BlackoutGate経由、`approve→postNow` 順)/「承認のみ」/「却下」 |
+| **Inbox** | メンション返信案・絡み案の承認/編集/送信 | `kind !== "post"` のみ表示し、性質が違うので**返信案(sky)と引用案/引用RT(violet)に分けて表示**(`kind==="reply"`/`"quote"`)。「監視を1回実行」(横の件数入力でその回の生成上限を指定・既定10、`monitorRunOnce(limit)`)、各案を「承認して送信」(BlackoutGate経由、`approve→postNow` 順)/「承認のみ」/「却下」 |
 | **Queue** | 自分投稿の下書き・予約・投稿・取消をタブ管理 | タブ: 下書き(post限定)/承認済み/予約/投稿済み/取消。queued/approved 表示時に `reconcileSchedules` を1回実行(失効復旧)。最適時間予約/時間指定予約(SchedulePicker)/今すぐ投稿/取消。BlackoutGate は「今すぐ投稿」「時間指定予約」のみ(最適予約・取消は通さない) |
 | **Posts** | 直近1週間の自分投稿を通常リポストで再拡散 | recentPosts/refreshPosts、リポスト(now/time)。Inbox/Queue と並んで `useBlackoutGate` を直接使う画面(投稿・予約を伴う3画面)。Compose は下書き作成専用のため BlackoutGate を使わない |
 | **Targets** | 絡む対象の管理 | リストを丸ごと対象化(推奨、`addTargetList`)、個別ハンドル追加、削除。kind=list は「リスト連携」バッジ、個別は user_id 解決済み/未解決バッジ |
@@ -615,9 +615,9 @@ CLI とほぼ対応する。差分・専用ツール:
 
 ### 受信監視・絡み案生成(`monitor.run_once`)
 
-`run_once(session, x_client, formatter, me_user_id) -> {"reply_suggestions": replies, "quote_suggestions": 0}` が1監視サイクル。**全ソースがリプライ案(kind=reply)を生成する**(対象アカウントへの絡みも引用案→リプに統一したため `quote_suggestions` は常に0)。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。
+`run_once(session, x_client, formatter, me_user_id, max_drafts=None) -> {"reply_suggestions": replies, "quote_suggestions": 0}` が1監視サイクル。**全ソースがリプライ案(kind=reply)を生成する**(対象アカウントへの絡みも引用案→リプに統一したため `quote_suggestions` は常に0)。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。
 
-`budget = max(0, int(cfg.max_drafts_per_run or 0))` を**全ソース横断の総生成数バジェット**として共有。各ソースは下表の順で、`budget > 0` かつ対応トグルが ON のときだけ呼ばれ、生成数を `budget` から減算する(先着順・優先度固定)。
+`budget`(手動1回実行で `max_drafts` を渡せばその回限りの上限、未指定は `cfg.max_drafts_per_run`)を**全ソース横断の総生成数バジェット**として共有。各ソースは下表の順で、`budget > 0` かつ対応トグルが ON のときだけ呼ばれ、生成数を `budget` から減算する(先着順・優先度固定)。
 
 | 順 | トグル | 関数 | 生成物 | 対象抽出 | カーソル stream |
 |---|---|---|---|---|---|

@@ -244,15 +244,18 @@ def poll_following(
 
 
 def run_once(
-    session: Session, x_client: XClient, formatter: Formatter, me_user_id: str
+    session: Session, x_client: XClient, formatter: Formatter, me_user_id: str,
+    max_drafts: int | None = None,
 ) -> dict:
     """1回分の監視サイクル。各ソースはトグル(MonitorSettings)で個別にオン/オフ。
 
-    max_drafts_per_run を総生成数バジェットとして全ソースで共有し、一気に作りすぎてAPIを
-    圧迫しないようにする。バジェットを使い切ったら以降のソースはスキップする。
+    総生成数バジェットを全ソースで共有し、一気に作りすぎてAPIを圧迫しないようにする
+    (使い切ったら以降のソースはスキップ)。手動の1回実行で件数を絞りたいときは max_drafts に
+    その回限りの上限を渡す(指定なしは設定値 max_drafts_per_run を使う)。
     """
     cfg = get_monitor_settings(session)
-    budget = max(0, int(cfg.max_drafts_per_run or 0))
+    cap = cfg.max_drafts_per_run if max_drafts is None else max_drafts
+    budget = max(0, int(cap or 0))
     replies = 0
     if cfg.mentions_enabled and budget > 0:
         c = poll_mentions(session, x_client, formatter, me_user_id, limit=budget)

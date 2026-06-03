@@ -149,6 +149,17 @@ def test_max_drafts_per_run_caps_total(session, fake_formatter):
     assert len(session.exec(select(Draft)).all()) == 3
 
 
+def test_run_once_max_drafts_override(session, fake_formatter):
+    """手動1回実行の max_drafts はその回だけ生成数を絞り、設定値より優先される。"""
+    monitor.set_monitor_settings(session, max_drafts_per_run=10)
+    fx = FakeXClient(
+        mentions=[{"id": str(100 + i), "text": f"m{i}", "author_id": "u1"} for i in range(10)],
+    )
+    res = monitor.run_once(session, fx, fake_formatter, me_user_id="me", max_drafts=2)
+    assert res["reply_suggestions"] == 2
+    assert len(session.exec(select(Draft)).all()) == 2
+
+
 def test_budget_shared_across_sources(session, fake_formatter):
     """バジェットはメンションと対象アカウントで共有され、合計が上限を超えない。"""
     monitor.set_monitor_settings(session, max_drafts_per_run=2, keyword_search_enabled=True)

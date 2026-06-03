@@ -20,12 +20,14 @@ router = APIRouter(prefix="/monitor", tags=["monitor"], dependencies=[Depends(re
 
 @router.post("/run-once")
 def run_once(
+    limit: int | None = None,
     session: Session = Depends(db_session),
     x_client: XClient = Depends(get_x_client),
     formatter: Formatter = Depends(get_formatter),
 ) -> dict:
+    """監視を1サイクル実行。limit を渡すとその回だけ生成数をその件数までに絞る(乱造防止)。"""
     me = x_client.get_me()
-    return monitor_mod.run_once(session, x_client, formatter, me["id"])
+    return monitor_mod.run_once(session, x_client, formatter, me["id"], max_drafts=limit)
 
 
 @router.get("/settings", response_model=MonitorSettings)

@@ -196,10 +196,12 @@ export const api = {
     }),
   deleteTarget: (id: number) => req<{ deleted: number }>(`/targets/${id}`, { method: "DELETE" }),
 
-  monitorRunOnce: () =>
-    req<{ reply_suggestions: number; quote_suggestions: number }>("/monitor/run-once", {
-      method: "POST",
-    }),
+  // limit を渡すとその回だけ生成数を上限管理(乱造防止)。未指定なら設定の max_drafts_per_run。
+  monitorRunOnce: (limit?: number) =>
+    req<{ reply_suggestions: number; quote_suggestions: number }>(
+      `/monitor/run-once${limit != null ? `?limit=${limit}` : ""}`,
+      { method: "POST" },
+    ),
   getMonitorSettings: () => req<MonitorSettings>("/monitor/settings"),
   putMonitorSettings: (flags: Partial<MonitorSettings>) =>
     req<MonitorSettings>("/monitor/settings", {

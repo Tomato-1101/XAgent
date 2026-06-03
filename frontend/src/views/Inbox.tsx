@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { Badge, Button, Spinner } from "../components/ui";
+import { Badge, Button, Input, Spinner } from "../components/ui";
 import { DraftCard, charCount } from "../components/DraftCard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
@@ -34,6 +34,7 @@ export default function Inbox({ me }: { me: Me | null }) {
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
+  const [runLimit, setRunLimit] = useState(10); // 1回実行で作る上限(乱造防止・既定10)
   const [pending, setPending] = useState<Draft | null>(null);
   const toast = useToast();
   const { gate, element: blackoutGate } = useBlackoutGate();
@@ -52,8 +53,8 @@ export default function Inbox({ me }: { me: Me | null }) {
     setError(null);
     setInfo(null);
     try {
-      const r = await api.monitorRunOnce();
-      setInfo(`返信案を ${r.reply_suggestions} 件生成しました（絡み先へのリプライ含む）`);
+      const r = await api.monitorRunOnce(runLimit > 0 ? runLimit : undefined);
+      setInfo(`返信案を ${r.reply_suggestions} 件生成しました（最大 ${runLimit} 件・絡み先へのリプライ含む）`);
       reload();
     } catch (e) {
       setError(String(e));
@@ -169,9 +170,23 @@ export default function Inbox({ me }: { me: Me | null }) {
             メンションへの返信案・絡み案（承認すれば送信できます）。
           </p>
         </div>
-        <Button onClick={runMonitor} disabled={busy} variant="outline">
-          {busy ? <Spinner /> : "監視を1回実行"}
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-zinc-500">
+            最大
+            <Input
+              type="number"
+              min={1}
+              className="w-16"
+              value={runLimit}
+              disabled={busy}
+              onChange={(e) => setRunLimit(Math.max(1, Math.floor(Number(e.target.value) || 0)))}
+            />
+            件
+          </label>
+          <Button onClick={runMonitor} disabled={busy} variant="outline">
+            {busy ? <Spinner /> : "監視を1回実行"}
+          </Button>
+        </div>
       </div>
 
       <AgentHint title="絡みをClaude Codeに任せる" phrases={AGENT_PHRASES} />
