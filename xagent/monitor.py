@@ -1,5 +1,5 @@
 """受信監視。メンション/自分宛リプライと、絡み対象(有名人等)の新規投稿をポーリングし、
-返信案・引用RT案を「下書き(未承認)」として生成する。承認は人間が行う。
+返信案(絡み先へのリプライを含む)を「下書き(未承認)」として生成する。承認は人間が行う。
 
 ストリーム不可のため定期ポーリング。MonitorCursor で since_id を管理し重複を防ぐ。
 """
@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 
 from .formatter import Formatter
 from .models import EngageTarget, MonitorCursor, MonitorSettings, TargetKind
-from .service import create_quote_draft, create_reply_draft
+from .service import create_reply_draft
 from .x_client import XClient
 
 FOLLOWING_MAX_ACCOUNTS = 20  # フォロー中巡回の1ティック上限(コスト抑制)
@@ -101,7 +101,7 @@ def poll_mentions(
 def poll_targets(
     session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
 ) -> int:
-    """手動追加(MANUAL・user_id付き)の新規投稿→引用RT案。limit は全対象で共有。生成件数を返す。"""
+    """手動追加(MANUAL・user_id付き)の新規投稿→リプライ案。limit は全対象で共有。生成件数を返す。"""
     targets = session.exec(
         select(EngageTarget).where(
             EngageTarget.active == True,  # noqa: E712
@@ -119,7 +119,7 @@ def poll_targets(
             x_client.get_user_timeline(target.user_id, since_id=cur.last_seen_id), remaining
         )
         for t in tweets:
-            create_quote_draft(
+            create_reply_draft(
                 session, formatter, t["id"], t.get("text", ""),
                 target_handle=target.handle, target_created_at=t.get("created_at"),
             )
@@ -135,7 +135,7 @@ def poll_targets(
 def poll_lists(
     session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
 ) -> int:
-    """Xリスト連携(kind=LIST)→リストの現メンバーを毎回展開し各人の新規投稿→引用RT案。
+    """Xリスト連携(kind=LIST)→リストの現メンバーを毎回展開し各人の新規投稿→リプライ案。
 
     メンバーは巡回ごとに get_list_members で取り直すため、Xリスト側の増減が自動で反映される
     (=リスト更新が絡む相手に連携)。limit は全対象で共有。生成件数を返す。
@@ -164,7 +164,7 @@ def poll_lists(
                 x_client.get_user_timeline(uid, since_id=cur.last_seen_id), remaining
             )
             for t in tweets:
-                create_quote_draft(
+                create_reply_draft(
                     session, formatter, t["id"], t.get("text", ""),
                     target_handle=m.get("username"), target_created_at=t.get("created_at"),
                 )
@@ -180,7 +180,7 @@ def poll_lists(
 def poll_genre(
     session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
 ) -> int:
-    """ジャンル/キーワード探索(GENRE対象)→該当投稿に引用RT案。limit は全対象で共有。生成件数を返す。"""
+    """ジャンル/キーワード探索(GENRE対象)→該当投稿にリプライ案。limit は全対象で共有。生成件数を返す。"""
     targets = session.exec(
         select(EngageTarget).where(
             EngageTarget.active == True,  # noqa: E712
@@ -198,7 +198,7 @@ def poll_genre(
             x_client.search_recent(target.keyword, since_id=cur.last_seen_id), remaining
         )
         for t in tweets:
-            create_quote_draft(
+            create_reply_draft(
                 session, formatter, t["id"], t.get("text", ""),
                 target_handle=t.get("author_id"), target_created_at=t.get("created_at"),
             )
@@ -215,7 +215,7 @@ def poll_following(
     session: Session, x_client: XClient, formatter: Formatter, me_user_id: str,
     limit: int | None = None,
 ) -> int:
-    """フォロー中アカウントの新規投稿→引用RT案。limit は全対象で共有。生成件数を返す。"""
+    """フォロー中アカウントの新規投稿→リプライ案。limit は全対象で共有。生成件数を返す。"""
     following = x_client.get_following(me_user_id, max_total=FOLLOWING_MAX_ACCOUNTS)
     created = 0
     for user in following:
@@ -230,7 +230,7 @@ def poll_following(
             x_client.get_user_timeline(uid, since_id=cur.last_seen_id), remaining
         )
         for t in tweets:
-            create_quote_draft(
+            create_reply_draft(
                 session, formatter, t["id"], t.get("text", ""),
                 target_handle=user.get("username"), target_created_at=t.get("created_at"),
             )
@@ -254,24 +254,26 @@ def run_once(
     cfg = get_monitor_settings(session)
     budget = max(0, int(cfg.max_drafts_per_run or 0))
     replies = 0
-    quotes = 0
     if cfg.mentions_enabled and budget > 0:
-        replies = poll_mentions(session, x_client, formatter, me_user_id, limit=budget)
-        budget -= replies
+        c = poll_mentions(session, x_client, formatter, me_user_id, limit=budget)
+        replies += c
+        budget -= c
     if cfg.manual_targets_enabled and budget > 0:
         c = poll_targets(session, x_client, formatter, limit=budget)
-        quotes += c
+        replies += c
         budget -= c
     if cfg.manual_targets_enabled and budget > 0:
         c = poll_lists(session, x_client, formatter, limit=budget)
-        quotes += c
+        replies += c
         budget -= c
     if cfg.keyword_search_enabled and budget > 0:
         c = poll_genre(session, x_client, formatter, limit=budget)
-        quotes += c
+        replies += c
         budget -= c
     if cfg.following_enabled and budget > 0:
         c = poll_following(session, x_client, formatter, me_user_id, limit=budget)
-        quotes += c
+        replies += c
         budget -= c
-    return {"reply_suggestions": replies, "quote_suggestions": quotes}
+    # 対象アカウントへの絡みもリプライに統一したので全ソースが返信案を生む。
+    # quote_suggestions は互換のため残すが常に0(自動の引用案生成は廃止)。
+    return {"reply_suggestions": replies, "quote_suggestions": 0}

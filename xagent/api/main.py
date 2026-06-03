@@ -42,11 +42,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     sched = None
     if settings.scheduler_enabled:
-        # 予約投稿/リポストと絡み案生成を自動で回す常駐スケジューラ(別デーモン不要)。
-        # APIプロセス自体が常駐(launchd)なので、これで予約投稿も絡み生成もこの1プロセスで賄える。
+        # 予約投稿の発火だけを自動で回す常駐スケジューラ(別デーモン不要)。
+        # 絡み案の自動生成(monitor)はAPIコスト節約のため自動では回さず、手動スキャン
+        # (Inbox「監視を1回実行」/ CLI `xagent monitor-once`)でのみ生成する方針。
         from apscheduler.schedulers.background import BackgroundScheduler
 
-        from ..daemon import monitor_tick, queue_tick
+        from ..daemon import queue_tick
 
         sched = BackgroundScheduler(timezone="UTC")
         # 予約投稿の発火: 常時。posting_enabled/認証・予約/制限帯/頻度ガードを通すので誤爆しない。
@@ -54,18 +55,8 @@ async def lifespan(app: FastAPI):
             queue_tick, "interval",
             seconds=settings.scheduler_interval_seconds, id="queue",
         )
-        # 絡み案の自動生成: 同プロセスで回し、実処理の可否は auto_monitor_enabled トグルで内部制御。
-        # OFFのときは即returnするだけ(API消費なし)。生成するのは下書きのみで自動投稿はしない。
-        sched.add_job(
-            monitor_tick, "interval",
-            seconds=settings.monitor_interval_seconds, id="monitor",
-            max_instances=1, coalesce=True,
-        )
         sched.start()
-        log.info(
-            "常駐スケジューラを起動 (queue=%ss, monitor=%ss)",
-            settings.scheduler_interval_seconds, settings.monitor_interval_seconds,
-        )
+        log.info("常駐スケジューラを起動 (queue=%ss, monitorは自動実行しない)", settings.scheduler_interval_seconds)
     try:
         yield
     finally:

@@ -53,7 +53,7 @@ export default function Inbox({ me }: { me: Me | null }) {
     setInfo(null);
     try {
       const r = await api.monitorRunOnce();
-      setInfo(`返信案 ${r.reply_suggestions} 件 / 絡み案 ${r.quote_suggestions} 件を生成`);
+      setInfo(`返信案を ${r.reply_suggestions} 件生成しました（絡み先へのリプライ含む）`);
       reload();
     } catch (e) {
       setError(String(e));

@@ -180,9 +180,10 @@ class MonitorSettings(SQLModel, table=True):
     manual_targets_enabled: bool = True
     keyword_search_enabled: bool = False
     following_enabled: bool = False
-    # 常駐デーモンの自動実行スイッチ。Falseにすると、プロセスは動いていても各ティックが
-    # その処理をスキップする(=デーモンを止めずにUIから一時停止/再開できる)。
-    auto_monitor_enabled: bool = True   # 監視ティック(絡み案の自動生成)を動かすか。UIのトグルで制御
+    # 絡み案の自動生成スイッチ。既定OFF: 絡み生成は自動では回さず手動スキャンでのみ行う方針
+    # (APIコスト節約)。スタンドアロン `daemon run()` 経由で使う場合のみ意味を持つ。
+    # 注: API常駐(launchd)では monitor ジョブ自体をスケジューラに登録しない(main.py)。
+    auto_monitor_enabled: bool = False
     # 予約投稿は常時実行する方針のため現在は未使用(緊急停止は config.posting_enabled が担う)。
     # 互換のため列は残す。
     auto_post_enabled: bool = True
