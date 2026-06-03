@@ -124,6 +124,11 @@ export function DraftCard({
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <Badge tone="sky">{KIND_LABEL[draft.kind]}</Badge>
         <Badge tone={STATUS_TONE[draft.status]}>{STATUS_LABEL[draft.status]}</Badge>
+        {draft.schedule_missed && (
+          <span title="予約時刻にPCがオフ等で投稿できず失効しました。承認済みに戻したので再予約してください。">
+            <Badge tone="amber">予約失効</Badge>
+          </span>
+        )}
         {draft.target_handle && <span className="text-zinc-500">→ @{draft.target_handle}</span>}
         {draft.scheduled_at && (
           <span className="text-violet-300">

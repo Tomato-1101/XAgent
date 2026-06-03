@@ -39,6 +39,7 @@ _ADDED_COLUMNS = {
         ("blackout_override", "BOOLEAN", "DEFAULT 0"),
         ("target_text", "VARCHAR", "DEFAULT ''"),
         ("target_created_at", "TIMESTAMP", ""),
+        ("schedule_missed", "BOOLEAN", "DEFAULT 0"),
     ],
     "monitorsettings": [
         ("max_drafts_per_run", "INTEGER", "DEFAULT 10"),

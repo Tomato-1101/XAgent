@@ -106,6 +106,26 @@ export default function Queue({ me }: { me: Me | null }) {
       .catch((e) => setError(String(e)));
   }
 
+  // 予約/承認済みタブを開いたら、PCオフ等で発火できなかった予約を失効させる(承認済みへ戻す)。
+  // デーモンが動いていない間に過ぎた予約を、遅れて投稿せず再予約待ちにするための復旧処理。
+  useEffect(() => {
+    if (status !== "queued" && status !== "approved") return;
+    api
+      .reconcileSchedules()
+      .then((r) => {
+        if (r.missed.length > 0) {
+          toast({
+            tone: "info",
+            message: `予約 ${r.missed.length} 件が時刻超過で失効しました。「承認済み」タブで再予約してください。`,
+          });
+          reload();
+        }
+      })
+      .catch(() => {});
+    // statusが変わるたびに1度だけ実行する(reload/toastは安定参照でないため依存に含めない)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
   useEffect(reload, [status]);
   useEffect(() => {
     api.recommendedTimes().then(setRec).catch(() => setRec(null));

@@ -25,6 +25,7 @@ class DraftRead(BaseModel):
     posted_at: datetime | None
     posted_tweet_id: str | None
     blackout_override: bool = False
+    schedule_missed: bool = False  # 予約失効(PCオフ等で発火できず)→再予約を促す印
     created_at: datetime
     updated_at: datetime
 
@@ -45,6 +46,7 @@ def draft_to_read(d: Draft) -> DraftRead:
         posted_at=d.posted_at,
         posted_tweet_id=d.posted_tweet_id,
         blackout_override=d.blackout_override,
+        schedule_missed=d.schedule_missed,
         created_at=d.created_at,
         updated_at=d.updated_at,
     )

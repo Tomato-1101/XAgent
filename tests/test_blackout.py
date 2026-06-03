@@ -162,7 +162,7 @@ def test_scheduled_fires_with_override_in_blackout(session, fake_x):
     d = service.create_repost_draft(session, "777")
     service.approve_draft(session, d)
     service.queue_draft(
-        session, d, scheduled_at=datetime(2026, 6, 1, 1, 0, 0), blackout_override=True
+        session, d, scheduled_at=datetime(2026, 6, 1, 1, 40, 0), blackout_override=True
     )
     now = datetime(2026, 6, 1, 2, 0, 0)  # 月 JST 11:00(制限帯)
     res = process_due_queue(session, fake_x, now=now, settings=_settings())
@@ -175,7 +175,7 @@ def test_scheduled_blocked_in_blackout_without_override(session, fake_x):
     d = service.create_repost_draft(session, "888")
     service.approve_draft(session, d)
     service.queue_draft(
-        session, d, scheduled_at=datetime(2026, 6, 1, 1, 0, 0), blackout_override=False
+        session, d, scheduled_at=datetime(2026, 6, 1, 1, 40, 0), blackout_override=False
     )
     now = datetime(2026, 6, 1, 2, 0, 0)
     res = process_due_queue(session, fake_x, now=now, settings=_settings())
@@ -191,7 +191,7 @@ def test_scheduled_fires_after_blackout_window(session, fake_x):
     d = service.create_repost_draft(session, "999")
     service.approve_draft(session, d)
     service.queue_draft(
-        session, d, scheduled_at=datetime(2026, 6, 1, 1, 0, 0), blackout_override=False
+        session, d, scheduled_at=datetime(2026, 6, 1, 10, 40, 0), blackout_override=False
     )
     now = datetime(2026, 6, 1, 11, 0, 0)  # 月 JST 20:00(帯外)→ override無しでも発火
     res = process_due_queue(session, fake_x, now=now, settings=_settings())

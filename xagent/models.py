@@ -59,6 +59,10 @@ class Draft(SQLModel, table=True):
     # 予約投稿はUIから人がいない時刻に発火するため、許可をこの列に保存しておく。
     blackout_override: bool = False
 
+    # 予約時刻にPCオフ等で投稿できず失効した印。承認済みに戻して再予約を促すためのフラグ。
+    # 再予約(queue_draft)時にクリアする。古い予約を遅れて投稿しないための安全弁。
+    schedule_missed: bool = False
+
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 

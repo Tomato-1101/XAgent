@@ -150,6 +150,10 @@ export const api = {
     return req<Draft[]>(`/drafts${qs ? `?${qs}` : ""}`);
   },
 
+  // 発火できなかった予約(PCオフ等)を失効させ承認済みへ戻す。失効したdraft idを返す。
+  reconcileSchedules: () =>
+    req<{ missed: number[] }>("/drafts/reconcile-schedules", { method: "POST" }),
+
   updateDraft: (id: number, body: { segments?: string[]; scheduled_at?: string }) =>
     req<Draft>(`/drafts/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
 

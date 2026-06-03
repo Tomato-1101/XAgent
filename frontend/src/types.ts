@@ -16,6 +16,7 @@ export interface Draft {
   posted_at: string | null;
   posted_tweet_id: string | null;
   blackout_override: boolean;
+  schedule_missed: boolean; // 予約失効(PCオフ等で発火できず)→再予約を促す印
   created_at: string;
   updated_at: string;
 }

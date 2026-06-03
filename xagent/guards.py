@@ -45,6 +45,7 @@ ALLOWED_TRANSITIONS: dict[DraftStatus, set[DraftStatus]] = {
     DraftStatus.APPROVED: {DraftStatus.QUEUED, DraftStatus.REJECTED, DraftStatus.CANCELED},
     DraftStatus.QUEUED: {
         DraftStatus.POSTED,
+        DraftStatus.QUEUED,    # 予約時刻の変更(再予約)を許可する
         DraftStatus.APPROVED,
         DraftStatus.REJECTED,
         DraftStatus.CANCELED,

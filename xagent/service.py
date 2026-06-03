@@ -6,7 +6,7 @@ DBセッションは引数で受け取り(テスト容易性のため)、外部�
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, select
 
@@ -454,7 +454,43 @@ def queue_draft(
     if blackout_override:
         # 制限帯への予約を二段階確認した → 発火時刻に人がいなくても投稿を許可する
         draft.blackout_override = True
+    draft.schedule_missed = False  # 再予約したので前回の失効印は消す
     return _set_status(session, draft, DraftStatus.QUEUED)
+
+
+# 予約時刻をこの猶予以上に過ぎても未投稿なら「失効」扱い。遅れて投稿せず再予約を促す。
+# (発火直前にPCを開けた等の数分の遅れは投稿を許す。何時間も遅れた投稿はXで逆効果のため。)
+MISSED_SCHEDULE_GRACE = timedelta(minutes=30)
+
+
+def reconcile_missed_schedules(
+    session: Session, now: datetime | None = None, grace: timedelta = MISSED_SCHEDULE_GRACE
+) -> list[int]:
+    """予約時刻を猶予以上過ぎても未投稿の予約を「失効」させる。
+
+    PCを閉じていた等でスケジューラが発火できなかった予約が queued のまま残ると、再操作で
+    詰まる/遅れて投稿される。これらを承認済みへ戻し schedule_missed を立てて、UIで失効を示し
+    次の最適時間の再予約を促す。失効させた draft id のリストを返す。
+    """
+    now = now or _utcnow()
+    cutoff = now - grace
+    stmt = select(Draft).where(
+        Draft.status == DraftStatus.QUEUED,
+        Draft.scheduled_at != None,  # noqa: E711
+    )
+    missed: list[int] = []
+    for draft in session.exec(stmt).all():
+        if draft.scheduled_at <= cutoff:
+            draft.status = DraftStatus.APPROVED  # 承認は済んでいるので承認済みへ戻す
+            draft.scheduled_at = None
+            draft.schedule_missed = True
+            draft.updated_at = now
+            session.add(draft)
+            if draft.id is not None:
+                missed.append(draft.id)
+    if missed:
+        session.commit()
+    return missed
 
 
 # --- 投稿 -------------------------------------------------------------------

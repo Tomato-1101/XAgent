@@ -37,6 +37,12 @@ def list_drafts(
     return [draft_to_read(d) for d in service.list_drafts(session, status=status, kind=kind)]
 
 
+@router.post("/reconcile-schedules")
+def reconcile_schedules(session: Session = Depends(db_session)) -> dict:
+    """発火できなかった予約(PCオフ等)を失効させ承認済みへ戻す。失効したdraft idを返す。"""
+    return {"missed": service.reconcile_missed_schedules(session)}
+
+
 @router.get("/{draft_id}", response_model=DraftRead)
 def get_draft(draft_id: int, session: Session = Depends(db_session)) -> DraftRead:
     return draft_to_read(_load(session, draft_id))

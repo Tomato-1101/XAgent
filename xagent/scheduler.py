@@ -15,7 +15,7 @@ from sqlmodel import Session, select
 from .config import Settings, get_settings
 from .guards import PolicyViolation, PostTrigger
 from .models import Draft, DraftStatus
-from .service import post_draft
+from .service import post_draft, reconcile_missed_schedules
 from .x_client import XClient
 
 # 日本時間で一般にエンゲージが高いとされる時間帯(時)。ネット調査(下記 RECOMMENDED_SOURCES)に基づく。
@@ -138,6 +138,8 @@ def process_due_queue(
     """期限到来分を投稿。頻度ガードで弾かれた分は据え置き、結果サマリを返す。"""
     settings = settings or get_settings()
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    # 猶予を超えて発火できなかった予約は遅れて投稿せず失効させる(残りの到来分だけ投稿)。
+    missed = reconcile_missed_schedules(session, now)
     posted, skipped, errors = [], [], []
     for draft in due_drafts(session, now):
         try:
@@ -151,4 +153,4 @@ def process_due_queue(
             skipped.append({"draft_id": draft.id, "reason": str(e)})
         except Exception as e:  # 投稿失敗(ネットワーク等)は据え置き
             errors.append({"draft_id": draft.id, "error": str(e)})
-    return {"posted": posted, "skipped": skipped, "errors": errors}
+    return {"posted": posted, "skipped": skipped, "errors": errors, "missed": missed}
