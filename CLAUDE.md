@@ -11,11 +11,11 @@
 - **自分のXアカウントへの書き込み（投稿/RT/リスト作成・メンバー追加）＝公式X API（tweepy/OAuth1.0a）のみ。** twitterapi.io は**読み取り専用**（ハンドル解決・メンバー閲覧）。書き込みに使わない。
 - **自動投稿はしない。** 下書きは必ず人間の承認を要する。スケジューラ/デーモンが投稿してよいのは「ユーザーが承認し予約済みで発火時刻に達した下書き」だけ（`status==QUEUED` かつ `scheduled_at` 設定済みかつ期限到来）。生成系（monitor）は下書きを作るだけで投稿しない。
 - **秘密情報（`.env`, `.env.*`, APIキー, credentials, `*.pem`, `*.key`）は読まない/出力しない/コミットしない。**
-- 緊急停止は `config.posting_enabled`。予約投稿の発火は常時動かす方針（止めない）。絡み案の自動生成（monitor_tick）だけ `MonitorSettings.auto_monitor_enabled` でON/OFF（API節約のため）。
+- 緊急停止は `config.posting_enabled`。予約投稿の発火は常時動かす方針（止めない）。**絡み案の自動生成（monitor）は自動では回さない**＝手動スキャン（Inbox「監視を1回実行」/ CLI `xagent monitor-once`）でのみ生成（APIコスト節約・乱造防止）。対象アカウントへの絡みは引用案ではなく**リプライ案**で生成する。
 
 ## 常駐構成（→ memory `xagent-daemon-architecture` と概要doc §10）
 
-- バックエンドは **launchd `com.tomato.xagent`**（KeepAlive=true）が `127.0.0.1:8000` に常駐。API内蔵の `BackgroundScheduler` が2ジョブを回す: `queue_tick`(60s, 予約発火・常時) と `monitor_tick`(180s, 絡み生成・トグル制御)。**ローカルでは別プロセスの `xagent daemon` は使わない。**
+- バックエンドは **launchd `com.tomato.xagent`**（KeepAlive=true）が `127.0.0.1:8000` に常駐。API内蔵の `BackgroundScheduler` は `queue_tick`(60s, 予約発火・常時)**のみ**を回す。絡み生成(monitor)は自動実行しない（手動スキャンのみ）。**ローカルでは別プロセスの `xagent daemon` は使わない。**
 - **再起動**（コード変更/マイグレーション反映）: `launchctl kickstart -k "gui/$(id -u)/com.tomato.xagent"` → `curl -s localhost:8000/health`。`kill` は launchd が即再生成するので使わない。
 - ログ: `~/Library/Logs/xagent.{out,err}.log`（uvicorn は `--log-level warning` なのでINFOは出ない）。
 - フロント: `cd frontend && npm run dev`。**ポートは固定 5180**（`vite.config.ts` の `strictPort:true`、Hermesの5173回避）。`http://localhost:5180/`。

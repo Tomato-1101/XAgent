@@ -165,7 +165,10 @@ def choose_template(complete_fn, candidates: list[PromptTemplate], source_text: 
 def seed_builtin_templates(session: Session) -> int:
     """buzz-playbook由来の型を初期投入する(冪等)。新規投入した件数を返す。
 
-    同名の型が既にあればスキップ。各kindに既定(active)が無ければ、投入/既存のbuiltinを既定にする。
+    新規は投入。既存でも builtin(prompts.py由来)なら本文を最新へ同期する
+    (prompts.pyの型テキストを更新したら再シードで反映されるように)。
+    ユーザーが編集/作成した型(builtin=False)は上書きしない。
+    各kindに既定(active)が無ければ、投入/既存のbuiltinを既定にする。
     """
     created = 0
     for name, kind, body in _BUILTIN:
@@ -175,6 +178,10 @@ def seed_builtin_templates(session: Session) -> int:
         if exists is None:
             create_template(session, name, kind, body, builtin=True)
             created += 1
+        elif exists.builtin and exists.body != body:
+            exists.body = body
+            session.add(exists)
+            session.commit()
     # 各kindに既定が無ければ、その kind の最初の型を既定にする
     for kind in (TemplateKind.POST, TemplateKind.REPLY, TemplateKind.QUOTE):
         has_active = session.exec(

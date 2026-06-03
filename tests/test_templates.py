@@ -54,6 +54,23 @@ def test_seed_builtin_is_idempotent(session):
     assert templates_mod.active_body(session, TemplateKind.REPLY) != ""
 
 
+def test_seed_builtin_syncs_body_for_builtin(session):
+    """builtin(prompts.py由来)の型は再シードで本文が最新へ同期される(prompts.py更新の反映)。"""
+    from xagent.prompts import REPLY_PLAYBOOK
+
+    templates_mod.seed_builtin_templates(session)
+    reply = templates_mod.list_templates(session, TemplateKind.REPLY)[0]
+    assert reply.builtin is True
+    # 本文を古い値に差し替え → 再シードで prompts.py の最新値へ戻る
+    reply.body = "古い本文"
+    session.add(reply)
+    session.commit()
+    templates_mod.seed_builtin_templates(session)
+    session.refresh(reply)
+    assert reply.body == REPLY_PLAYBOOK
+    assert reply.body != "古い本文"
+
+
 def test_choose_template_picks_valid_id(session):
     a = templates_mod.create_template(session, "型A", TemplateKind.POST, "本文A")
     b = templates_mod.create_template(session, "型B", TemplateKind.POST, "本文B")

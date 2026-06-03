@@ -51,7 +51,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 ### プロセス構成
 
 - **API プロセス(常駐)**: FastAPI (`xagent/api/main.py`) を uvicorn で起動。launchd (`com.tomato.xagent`、`KeepAlive` 有効)で `127.0.0.1:8000` に常駐する。
-- **内蔵 BackgroundScheduler**: API プロセスの `lifespan` 内で `init_db()` 後、`scheduler_enabled` が真なら APScheduler の `BackgroundScheduler(timezone="UTC")` を生成。別デーモンを起こさず同1プロセスで予約投稿(`queue_tick`、既定60秒)と絡み案生成(`monitor_tick`、既定180秒)を回す。launchd 常駐構成では実際に回るのはこの内蔵スケジューラ。
+- **内蔵 BackgroundScheduler**: API プロセスの `lifespan` 内で `init_db()` 後、`scheduler_enabled` が真なら APScheduler の `BackgroundScheduler(timezone="UTC")` を生成。別デーモンを起こさず同1プロセスで予約投稿(`queue_tick`、既定60秒)**だけ**を回す。**絡み案生成(`monitor_tick`)は自動実行しない**(APIコスト節約と乱造防止のため手動スキャンのみ。`monitor` ジョブはスケジューラに登録しない)。launchd 常駐構成では実際に回るのはこの内蔵スケジューラ。
 - **フロントエンド**: Vite + React + TypeScript の SPA (`frontend/`)。`vite.config.ts` で `port: 5180, strictPort: true` に固定(自動フォールバックしない)。
 - **永続化**: SQLite (`xagent.db`、`DB_PATH` 既定)。SQLModel(SQLAlchemy 上)経由でアクセスし、生 SQL は原則不使用。
 
@@ -213,7 +213,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `manual_targets_enabled` | `bool` | `True` | 手動リスト対象の監視(MANUAL+LIST の両方を支配) |
 | `keyword_search_enabled` | `bool` | `False` | キーワード探索(コスト高ゆえ既定オフ) |
 | `following_enabled` | `bool` | `False` | フォロー中の監視(コスト高ゆえ既定オフ) |
-| `auto_monitor_enabled` | `bool` | `True` | 監視ティック(絡み案の自動生成)を動かすか。UIトグル制御 |
+| `auto_monitor_enabled` | `bool` | `False` | スタンドアロン `daemon run()` 経由の絡み案自動生成の可否。API常駐では monitor ジョブを登録しないため未使用。既定OFF |
 | `auto_post_enabled` | `bool` | `True` | 「現在は未使用」。予約投稿は常時実行方針で、緊急停止は `config.posting_enabled` が担う。互換のため列のみ残存 |
 | `max_drafts_per_run` | `int` | `10` | 1監視サイクルで作る下書き総数上限(全ソース横断で共有) |
 | `updated_at` | `datetime` | `_utcnow` | (`set_monitor_settings` 内で明示更新しない) |
@@ -384,7 +384,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 - **分析(サマリ)**: 全 `DraftStatus` のステータス別下書き件数(`GET /analytics/summary`)。
 - **メディア(media)**: 画像(jpg/jpeg/png/webp/gif)最大4枚・動画(mp4/mov/m4v)1個・25MB上限。混在不可。保存は `<uuid4hex><ext>`、DB には相対パス。実際の X アップロードは投稿直前(`media_id` 失効回避)。
 - **おすすめ時間(recommended_times)**: UI 初期値用に重ならない直近 count 件のスロットを返す(`GET /schedule/recommended`)。tier は best(21時)/great(19・22時)/good(8・12・16時)。
-- **デーモントグル(auto_monitor_enabled)**: 絡み案の自動生成のみを制御。OFF でもプロセスは止めず各ティックがスキップ(API 消費なし)。予約投稿の発火は常時動く。
+- **絡み案の自動生成は廃止(手動スキャンのみ)**: API 常駐スケジューラに monitor ジョブを登録しないため絡み案は自動生成されない。生成は Inbox「監視を1回実行」/ CLI `xagent monitor-once` を叩いた時だけ。予約投稿の発火は常時動く。`auto_monitor_enabled` はスタンドアロン `daemon run()` を使う場合のゲートとしてのみ残置。
 - **DB容量管理(maintenance.enforce_db_capacity)**: `max_db_bytes`(既定2GB)超過時に端末状態(POSTED/REJECTED/CANCELED)のみ `created_at` 昇順で `_PURGE_BATCH=200` 件ずつ削除し VACUUM。生きた下書きは削除しない。
 - **コスト記録(cost)**: `commit` は常に呼び出し側に委ねる(下書き作成や学習と同一トランザクションで永続化)。`bill_formatter_usage` は整形器のトークン使用量をフラッシュしカウンタをリセット(二重課金防止)。両方0なら None。
 - **通知(notify)**: 承認待ちが出ると macOS 通知(`osascript`)。macOS 以外・通知不可環境では黙って no-op(例外を投げない)。
@@ -546,7 +546,7 @@ Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯�
 | **Templates** | 投稿/リプの「型」管理 | 種別ごと一覧、作成/編集/既定化(`activate`、1kind1つ)/削除。内蔵型も編集・削除可能 |
 | **Style** | 文体管理 | スタイルガイド(常時適用)保存、自分の過去投稿学習(`learn`)、アカウント学習(`learnProfile`、50/100/200件・is_self)、学習済みプロファイル一覧 |
 | **Analytics** | コスト・集計の閲覧専用 | `cost`(X API/Claude API 2カラム+内訳)、`summary`(ステータス別件数)。操作要素なし |
-| **Settings** | 監視・制限帯 | 監視ソーストグル(楽観的更新)、`max_drafts_per_run`、`auto_monitor_enabled`(絡み案生成のみ制御)、ブラックアウト編集(保存ボタンを押すまで反映されない) |
+| **Settings** | 監視・制限帯 | 監視ソーストグル(楽観的更新)、`max_drafts_per_run`、絡み案は手動スキャンのみ(自動生成トグルは撤去)、ブラックアウト編集(保存ボタンを押すまで反映されない) |
 | **Agent** | 静的な説明画面 | Claude Code への話しかけ方(言う言葉→やること→等価CLI)を3カテゴリで表示。API 呼び出しなし |
 
 ### 主要共通コンポーネント
@@ -615,17 +615,17 @@ CLI とほぼ対応する。差分・専用ツール:
 
 ### 受信監視・絡み案生成(`monitor.run_once`)
 
-`run_once(session, x_client, formatter, me_user_id) -> {"reply_suggestions": replies, "quote_suggestions": quotes}` が1監視サイクル。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。
+`run_once(session, x_client, formatter, me_user_id) -> {"reply_suggestions": replies, "quote_suggestions": 0}` が1監視サイクル。**全ソースがリプライ案(kind=reply)を生成する**(対象アカウントへの絡みも引用案→リプに統一したため `quote_suggestions` は常に0)。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。
 
 `budget = max(0, int(cfg.max_drafts_per_run or 0))` を**全ソース横断の総生成数バジェット**として共有。各ソースは下表の順で、`budget > 0` かつ対応トグルが ON のときだけ呼ばれ、生成数を `budget` から減算する(先着順・優先度固定)。
 
 | 順 | トグル | 関数 | 生成物 | 対象抽出 | カーソル stream |
 |---|---|---|---|---|---|
 | 1 | `mentions_enabled` | `poll_mentions` | reply | me_user_id 宛 | `"mentions"` |
-| 2 | `manual_targets_enabled` | `poll_targets` | quote | `active & user_id!=None & kind==MANUAL` | `target:<user_id>` |
-| 3 | `manual_targets_enabled` | `poll_lists` | quote | `active & kind==LIST & list_id!=None` | `target:<member_uid>` |
-| 4 | `keyword_search_enabled` | `poll_genre` | quote | `active & kind==GENRE & keyword!=None` | `genre:<keyword>` |
-| 5 | `following_enabled` | `poll_following` | quote | (自分のフォロー直接巡回) | `follow:<uid>` |
+| 2 | `manual_targets_enabled` | `poll_targets` | reply | `active & user_id!=None & kind==MANUAL` | `target:<user_id>` |
+| 3 | `manual_targets_enabled` | `poll_lists` | reply | `active & kind==LIST & list_id!=None` | `target:<member_uid>` |
+| 4 | `keyword_search_enabled` | `poll_genre` | reply | `active & kind==GENRE & keyword!=None` | `genre:<keyword>` |
+| 5 | `following_enabled` | `poll_following` | reply | (自分のフォロー直接巡回) | `follow:<uid>` |
 
 重要な不変条件:
 - ソース2・3は **同一トグル `manual_targets_enabled`** が両方を支配(LIST 専用トグルはない)。
@@ -665,12 +665,12 @@ override: `ensure_not_blackout(in_blackout, override, reason)` は `in_blackout 
 
 | 関数 | ゲート | 動作 |
 |---|---|---|
-| `monitor_tick()` | `auto_monitor_enabled` が OFF なら**即 return**(`XClient.from_settings` すら呼ばず API 消費ゼロ) | `get_me()` → `monitor.run_once(...)`。提案が1件以上なら `notify` で承認待ち通知。下書きのみ生成・自動投稿しない |
+| `monitor_tick()` | `auto_monitor_enabled` が OFF なら**即 return**。**API常駐スケジューラには登録しない**(スタンドアロン `daemon run()` 専用) | `get_me()` → `monitor.run_once(...)`。提案が1件以上なら `notify` で承認待ち通知。下書きのみ生成・自動投稿しない |
 | `queue_tick()` | ゲートなし(**常時実行**。「予約投稿は止めない」方針) | `process_due_queue(...)` |
 
 緊急停止の責務分担: 全投稿停止は `config.posting_enabled`、個別の制限帯/頻度ガードは `process_due_queue`→`post_draft`。`auto_post_enabled` は `queue_tick` のゲートに**使われていない**(未使用)。
 
-実運用構成: API プロセスの `lifespan` 内で `BackgroundScheduler(timezone="UTC")` が `queue`(60秒)と `monitor`(180秒、`max_instances=1`, `coalesce=True`)を登録。`daemon.run`(`BlockingScheduler` 版、CLI `xagent daemon`)は別経路で、launchd 常駐構成では実際に回るのは内蔵スケジューラ。
+実運用構成: API プロセスの `lifespan` 内で `BackgroundScheduler(timezone="UTC")` が `queue`(60秒)**のみ**を登録(monitorは自動実行しない)。`daemon.run`(`BlockingScheduler` 版、CLI `xagent daemon`)は monitor+queue 両方を回す別経路だが、launchd 常駐構成では使わない(実際に回るのは内蔵スケジューラの queue のみ)。
 
 ---
 
@@ -779,7 +779,7 @@ SQLite `xagent.db`(`DB_PATH` 既定)。容量上限 `MAX_DB_BYTES`(既定2GB)超
 
 ### UX 表示(修正項目 M3)
 
-- `poll_mentions`/`poll_genre` は `target_handle` に `author_id`(数値ID)を渡すため、絡み案の表示が `@123456...` になる。ただし実投稿の宛先は `target_tweet_id` で行うため**送信は正しい**(表示のみの問題)。
+- `poll_mentions`/`poll_genre` は `target_handle` に `author_id`(数値ID)を渡すため、リプライ案の表示が `@123456...` になる。ただし実投稿の宛先は `target_tweet_id` で行うため**送信は正しい**(表示のみの問題)。
 
 ### 未修正・記録のみ
 
@@ -814,7 +814,7 @@ SQLite `xagent.db`(`DB_PATH` 既定)。容量上限 `MAX_DB_BYTES`(既定2GB)超
 | `API_TOKEN` | None | 設定時に書込系で `X-API-Token` 必須。空ならローカル開放 |
 | `TIMEZONE` | `Asia/Tokyo` | 運用タイムゾーン |
 
-設定の二重制御: 投稿の緊急停止は `POSTING_ENABLED`、監視の一時停止は `MonitorSettings.auto_monitor_enabled`。1日上限は `MAX_POSTS_PER_DAY`(自然)と `HARD_CAP_POSTS_PER_DAY`(ハード)の二段。
+設定の二重制御: 投稿の緊急停止は `POSTING_ENABLED`、絡み案の自動生成は廃止(手動スキャンのみ。`MonitorSettings.auto_monitor_enabled` はスタンドアロンデーモン用に残置)。1日上限は `MAX_POSTS_PER_DAY`(自然)と `HARD_CAP_POSTS_PER_DAY`(ハード)の二段。
 
 ## 付録B. パッケージング・依存関係
 
