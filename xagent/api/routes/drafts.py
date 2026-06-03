@@ -8,7 +8,7 @@ from sqlmodel import Session
 from ... import scheduler, service
 from ...guards import BlackoutViolation, PolicyViolation
 from ...models import DraftKind, DraftStatus
-from ...x_client import XClient
+from ...x_client import XClient, XClientError
 from ..deps import db_session, get_x_client, require_api_token
 from ..schemas import (
     DraftRead,
@@ -144,4 +144,7 @@ def post_now(
         raise HTTPException(423, str(e))  # Locked: 制限時間帯。UIは二段階確認へ誘導する。
     except PolicyViolation as e:
         raise HTTPException(409, str(e))
+    except XClientError as e:
+        # X側の拒否(引用不可・権限不足・レート等)。500ではなく理由を返す。下書きは未投稿のまま残す。
+        raise HTTPException(502, str(e))
     return draft_to_read(d)

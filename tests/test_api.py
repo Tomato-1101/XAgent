@@ -69,6 +69,29 @@ def test_compose_approve_post_flow(client):
     assert client.fake_x.posted[0]["text"] == "今日学んだXのコツ"
 
 
+def test_post_now_returns_502_on_x_rejection(client):
+    """X側が引用不可・権限不足等で拒否したら、500ではなく502+理由を返し、下書きは未投稿で残す。"""
+    from xagent.api.deps import get_x_client
+    from xagent.api.main import app
+    from xagent.x_client import XClientError
+
+    did = client.post("/compose", json={"text": "引用できない投稿"}).json()["id"]
+    client.post(f"/drafts/{did}/approve")
+
+    class _ForbidX(FakeXClient):
+        def post(self, *a, **k):
+            raise XClientError(
+                "投稿に失敗しました: 403 Forbidden Quoting this post is not allowed"
+            )
+
+    app.dependency_overrides[get_x_client] = lambda: _ForbidX()
+    resp = client.post(f"/drafts/{did}/post")
+    assert resp.status_code == 502
+    assert "Quoting this post is not allowed" in resp.json()["detail"]
+    # 拒否されても下書きは投稿済みにならず承認済みのまま残る
+    assert client.get(f"/drafts/{did}").json()["status"] == "approved"
+
+
 def test_queue_optimal(client):
     did = client.post("/compose", json={"text": "予約したい投稿"}).json()["id"]
     client.post(f"/drafts/{did}/approve")

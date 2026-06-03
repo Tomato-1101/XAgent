@@ -134,11 +134,15 @@ class XClient:
         quote_tweet_id: str | None = None,
         media_ids: list[str] | None = None,
     ) -> str:
-        resp = self._client.create_tweet(
-            text=text,
-            in_reply_to_tweet_id=in_reply_to_tweet_id,
-            quote_tweet_id=quote_tweet_id,
-            media_ids=media_ids,
+        # tweepy例外(引用不可・権限不足等)は XClientError に変換し、UI/スケジューラで扱える形にする。
+        resp = self._guard(
+            "投稿",
+            lambda: self._client.create_tweet(
+                text=text,
+                in_reply_to_tweet_id=in_reply_to_tweet_id,
+                quote_tweet_id=quote_tweet_id,
+                media_ids=media_ids,
+            ),
         )
         data = getattr(resp, "data", None) or {}
         tweet_id = data.get("id") if isinstance(data, dict) else getattr(data, "id", None)
