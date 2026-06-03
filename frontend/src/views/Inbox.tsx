@@ -105,6 +105,61 @@ export default function Inbox({ me }: { me: Me | null }) {
 
   const total = pending ? pending.segments.reduce((a, s) => a + charCount(s), 0) : 0;
 
+  // 返信案と引用案は性質が違う(返信=会話 / 引用RT=拡散)ので分けて表示する。
+  const replies = items.filter((d) => d.kind === "reply");
+  const quotes = items.filter((d) => d.kind === "quote");
+
+  function renderCard(d: Draft) {
+    return (
+      <DraftCard
+        key={d.id}
+        draft={d}
+        onUpdated={() => {
+          toast({ tone: "success", message: "案を更新しました。" });
+          reload();
+        }}
+        actions={
+          <>
+            <Button size="sm" variant="danger" onClick={() => setPending(d)}>
+              承認して送信
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                act(async () => {
+                  await api.approve(d.id);
+                  toast({
+                    tone: "success",
+                    message: "承認しました。Queueの「承認済み」タブで予約・投稿できます。",
+                  });
+                })
+              }
+            >
+              承認のみ
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
+              却下
+            </Button>
+          </>
+        }
+      />
+    );
+  }
+
+  function section(title: string, tone: "sky" | "violet", list: Draft[]) {
+    if (list.length === 0) return null;
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Badge tone={tone}>{title}</Badge>
+          <span className="text-xs text-zinc-500">{list.length} 件</span>
+        </div>
+        {list.map(renderCard)}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between">
@@ -125,42 +180,9 @@ export default function Inbox({ me }: { me: Me | null }) {
       {error && <div className="text-sm text-red-300">エラー: {error}</div>}
       {items.length === 0 && <div className="text-sm text-zinc-500">承認待ちの案はありません。</div>}
 
-      <div className="space-y-3">
-        {items.map((d) => (
-          <DraftCard
-            key={d.id}
-            draft={d}
-            onUpdated={() => {
-              toast({ tone: "success", message: "案を更新しました。" });
-              reload();
-            }}
-            actions={
-              <>
-                <Button size="sm" variant="danger" onClick={() => setPending(d)}>
-                  承認して送信
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    act(async () => {
-                      await api.approve(d.id);
-                      toast({
-                        tone: "success",
-                        message: "承認しました。Queueの「承認済み」タブで予約・投稿できます。",
-                      });
-                    })
-                  }
-                >
-                  承認のみ
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
-                  却下
-                </Button>
-              </>
-            }
-          />
-        ))}
+      <div className="space-y-6">
+        {section("返信案", "sky", replies)}
+        {section("引用案（引用RT）", "violet", quotes)}
       </div>
 
       <ConfirmDialog

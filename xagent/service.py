@@ -30,7 +30,7 @@ from .profiles import example_posts_for_account, get_profile_by_handle
 from .style import active_style_guide
 from . import templates as templates_mod
 from .text import split_into_thread
-from .x_client import XClient
+from .x_client import XClient, XClientError
 
 
 def _emulate_inputs(session: Session, emulate_handle: str | None) -> tuple[str, list[str] | None]:
@@ -510,6 +510,31 @@ def _rate_limiter(settings: Settings) -> RateLimiter:
     )
 
 
+def _quote_tweet_url(draft: Draft) -> str:
+    """引用元ツイートのURL。ハンドル不明でも status ID で開ける形にする。"""
+    handle = (draft.target_handle or "").lstrip("@")
+    base = f"https://x.com/{handle}" if handle else "https://x.com/i/web"
+    return f"{base}/status/{draft.target_tweet_id}"
+
+
+# X API v2 が引用可能な公開投稿でも返すことがある引用拒否メッセージの目印。
+_QUOTE_BLOCKED_MARK = "quoting this post is not allowed"
+
+
+def _post_quote(x_client: XClient, text: str, draft: Draft, media_ids: list[str] | None) -> str:
+    """引用投稿。まずネイティブの quote_tweet_id で投稿し、X API v2 が公開・引用可能な投稿でも
+    返すことのある『Quoting this post is not allowed...』403 のときだけ、本文末尾に元ツイートURLを
+    付けて投稿し直す(手動UIと同じ挙動。URLからも引用カードが生成される)。
+    """
+    try:
+        return x_client.post(text, quote_tweet_id=draft.target_tweet_id, media_ids=media_ids)
+    except XClientError as e:
+        if _QUOTE_BLOCKED_MARK not in str(e).lower() or not draft.target_tweet_id:
+            raise
+        # quote_tweet_id が弾かれた → URL埋め込み方式へフォールバック
+        return x_client.post(f"{text}\n{_quote_tweet_url(draft)}", media_ids=media_ids)
+
+
 def post_draft(
     session: Session,
     x_client: XClient,
@@ -573,11 +598,7 @@ def post_draft(
             )
         ]
     elif draft.kind == DraftKind.QUOTE:
-        ids = [
-            x_client.post(
-                segments[0], quote_tweet_id=draft.target_tweet_id, media_ids=media_ids
-            )
-        ]
+        ids = [_post_quote(x_client, segments[0], draft, media_ids)]
     else:  # POST(スレッド対応)
         ids = x_client.post_thread(segments, media_ids_first=media_ids)
 

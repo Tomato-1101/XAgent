@@ -46,6 +46,49 @@ def test_quote_uses_quote_id(session, fake_formatter, fake_x):
     assert fake_x.posted[0]["quote"] == "777"
 
 
+def test_quote_falls_back_to_url_when_quote_id_blocked(session, fake_formatter, fake_x):
+    """X API v2が引用可能な投稿でも返す『Quoting this post is not allowed』403のとき、
+    本文末尾に元ツイートURLを付けて投稿し直す(手動UI相当のフォールバック)。"""
+    from xagent.x_client import XClientError
+
+    # quote_tweet_id 指定だけ拒否し、URL方式(quote_tweet_id無し)は通すフェイク。
+    class _BlockQuoteId(type(fake_x)):
+        def post(self, text, in_reply_to_tweet_id=None, quote_tweet_id=None, media_ids=None):
+            if quote_tweet_id is not None:
+                raise XClientError(
+                    "投稿に失敗しました: 403 Forbidden Quoting this post is not allowed "
+                    "because you have not been mentioned or are not part of the conversation thread."
+                )
+            return super().post(text, in_reply_to_tweet_id=in_reply_to_tweet_id, media_ids=media_ids)
+
+    fx = _BlockQuoteId()
+    d = service.create_quote_draft(session, fake_formatter, "777", "有名人の投稿", "famous")
+    service.approve_draft(session, d)
+    ids = service.post_draft(session, fx, d, settings=_settings())
+
+    assert len(ids) == 1 and d.status == DraftStatus.POSTED
+    posted = fx.posted[0]
+    assert posted["quote"] is None                       # ネイティブ引用は使わず
+    assert "https://x.com/famous/status/777" in posted["text"]  # URL埋め込みで引用
+    assert "引用案" in posted["text"]                     # 元の本文も保持
+
+
+def test_quote_other_403_is_not_swallowed(session, fake_formatter, fake_x):
+    """引用拒否以外のX拒否(権限不足等)はフォールバックせず、そのまま伝播させる。"""
+    from xagent.x_client import XClientError
+
+    class _OtherForbidden(type(fake_x)):
+        def post(self, *a, **k):
+            raise XClientError("投稿に失敗しました: 403 Forbidden You are not permitted to perform this action.")
+
+    fx = _OtherForbidden()
+    d = service.create_quote_draft(session, fake_formatter, "777", "有名人の投稿", "famous")
+    service.approve_draft(session, d)
+    with pytest.raises(XClientError):
+        service.post_draft(session, fx, d, settings=_settings())
+    assert d.status != DraftStatus.POSTED
+
+
 def test_target_created_at_stored_naive_utc(session, fake_formatter):
     """元投稿の投稿時刻(aware)を渡すと naive UTC で保持され、表示・鮮度判断に使える。"""
     from datetime import timezone
