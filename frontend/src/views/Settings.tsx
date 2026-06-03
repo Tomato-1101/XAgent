@@ -145,15 +145,31 @@ export default function Settings() {
         )}
       </Card>
 
-      {/* 絡み案は自動生成しない方針(手動スキャンのみ)。APIコスト節約のため。 */}
+      {/* 絡み案の自動生成のオン/オフ(既定オフ)。予約投稿の発火はこれと無関係に常時。 */}
       <Card className="space-y-1">
-        <div className="text-sm text-zinc-400">絡み案の生成</div>
-        <p className="pt-1 text-xs text-zinc-500">
-          絡み案・返信案は<span className="text-zinc-300">自動では生成しません</span>。Inbox の「監視を1回実行」（または
-          CLI <code className="rounded bg-zinc-800 px-1">xagent monitor-once</code>）を押したときだけ、上でオンにした監視ソースを巡回して下書きを作ります。
-          無駄なAPI消費と下書きの乱造を避けるための方針です（生成は下書きのみ・自動投稿はしません）。
-          予約投稿の発火だけは常時自動で動きます（全投稿の緊急停止はサーバ側の posting_enabled）。
-        </p>
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-zinc-400">絡み案の自動生成</div>
+          {saving && <Spinner />}
+        </div>
+        {settings ? (
+          <>
+            <Switch
+              label="絡み案を自動生成する"
+              hint="オンの間だけ、上の監視ソースを定期巡回して返信案を自動で下書き生成する（既定オフ・下書きのみ・自動投稿はしない）"
+              checked={Boolean(settings.auto_monitor_enabled)}
+              disabled={saving}
+              onChange={(v) => toggle("auto_monitor_enabled", v)}
+            />
+            <p className="pt-1 text-xs text-zinc-500">
+              既定はオフ。オフの間はAPIを消費しません。生成したい時だけオンにしてください
+              （<span className="text-zinc-300">オンのままにすると一定間隔で下書きが増え続けます</span>。終わったらオフに）。
+              手動で1回だけ生成するなら Inbox の「監視を1回実行」。
+              予約投稿の発火はこのスイッチと無関係に常時動きます（全投稿の緊急停止はサーバ側の posting_enabled）。
+            </p>
+          </>
+        ) : (
+          <div className="text-sm text-zinc-500">読み込み中…</div>
+        )}
       </Card>
 
       {/* 制限時間帯(ブラックアウト) */}
@@ -236,7 +252,7 @@ export default function Settings() {
       </Card>
 
       <p className="text-xs text-zinc-600">
-        監視でオンにしたソースだけが「Inbox の監視を1回実行」で巡回されます（自動巡回はしません）。
+        監視でオンにしたソースだけが、自動生成オン時の巡回や「Inbox の監視を1回実行」で巡回されます。
         投稿は監視で自動化されず、承認したときだけ送信されます。
       </p>
     </div>
