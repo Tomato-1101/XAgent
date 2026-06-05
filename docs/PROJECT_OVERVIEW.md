@@ -315,7 +315,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `kind` | 動作 | コスト記録 | `posted_tweet_id` |
 |---|---|---|---|
 | `REPOST` | `target_tweet_id` 必須。`x_client.retweet(...)`。本文チェックの前に分岐・return | `WRITE` units=1 | `target_tweet_id`(RTには新規IDが無いため対象IDを記録) |
-| `REPLY` | `x_client.post(seg[0], in_reply_to_tweet_id=..., media_ids=...)` | `WRITE` units=len(ids) | `ids[0]` |
+| `REPLY` | **送信不可**: 頻度ガード直後に `PolicyViolation` で弾く。X API の制限(自分が言及/絡みを受けていない他人の会話への返信は403)で公式API送信できないため。下書き生成までにとどめ、送信は手動UIで行う(Inboxの「Xで返信（手動）」)。自分宛メンション返信は手動で送信。詳細は memory `xagent-api-reply-restriction` | — | — |
 | `QUOTE` | `_post_quote(...)`: まず `x_client.post(seg[0], quote_tweet_id=...)`。X が「引用不可」エラー(`quoting this post is not allowed`)を返したら本文末尾に対象URL(`_quote_tweet_url`)を付けて通常投稿に**フォールバック**。それ以外のエラーは握り潰さず再送出 | 同上 | `ids[0]` |
 | `POST` | `x_client.post_thread(segments, media_ids_first=...)`(スレッド対応) | 同上 | `ids[0]` |
 
@@ -538,7 +538,7 @@ Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯�
 | 画面 | 用途 | 主操作 |
 |---|---|---|
 | **Compose** | 思いつきを整形して下書き化 | ライブプレビュー(400msデバウンス)、メディア添付(画像4/動画1/混在不可)、emulate選択、案の数(1〜4)、型選択(既定`auto`)、長文許可/raw。指令マーカー(URL or「そのまま」等)があれば「指令を解析」→ confirm → command |
-| **Inbox** | メンション返信案・絡み案の承認/編集/送信 | `kind !== "post"` のみ表示し、性質が違うので**返信案(sky)と引用案/引用RT(violet)に分けて表示**(`kind==="reply"`/`"quote"`)。「監視を1回実行」(横の件数入力でその回の生成上限を指定・既定10、`monitorRunOnce(limit)`)、各案を「承認して送信」(BlackoutGate経由、`approve→postNow` 順)/「承認のみ」/「却下」 |
+| **Inbox** | メンション返信案・絡み案の承認/編集/送信 | `kind !== "post"` のみ表示し、性質が違うので**返信案(sky)と引用案/引用RT(violet)に分けて表示**(`kind==="reply"`/`"quote"`)。「監視を1回実行」(横の件数入力でその回の生成上限を指定・既定10、`monitorRunOnce(limit)`)。**返信案はAPI送信不可のため「Xで返信（手動）」(対象を別タブで開く)＋「却下」のみ**(注記を上部に表示)。引用案は「承認して送信」(BlackoutGate経由、`approve→postNow` 順)/「承認のみ」/「却下」 |
 | **Queue** | 自分投稿の下書き・予約・投稿・取消をタブ管理 | タブ: 下書き(post限定)/承認済み/予約/投稿済み/取消。queued/approved 表示時に `reconcileSchedules` を1回実行(失効復旧)。最適時間予約/時間指定予約(SchedulePicker)/今すぐ投稿/取消。BlackoutGate は「今すぐ投稿」「時間指定予約」のみ(最適予約・取消は通さない) |
 | **Posts** | 直近1週間の自分投稿を通常リポストで再拡散 | recentPosts/refreshPosts、リポスト(now/time)。Inbox/Queue と並んで `useBlackoutGate` を直接使う画面(投稿・予約を伴う3画面)。Compose は下書き作成専用のため BlackoutGate を使わない |
 | **Targets** | 絡む対象の管理 | リストを丸ごと対象化(推奨、`addTargetList`)、個別ハンドル追加、削除。kind=list は「リスト連携」バッジ、個別は user_id 解決済み/未解決バッジ |

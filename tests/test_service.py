@@ -31,12 +31,14 @@ def test_post_unapproved_blocked(session, fake_formatter, fake_x):
         service.post_draft(session, fake_x, d, settings=_settings())
 
 
-def test_reply_uses_in_reply_to(session, fake_formatter, fake_x):
+def test_reply_blocked_from_api(session, fake_formatter, fake_x):
+    """返信(リプライ)はX APIの制限(未engage会話への返信=403)で送信しない。下書きは作るが送信は手動。"""
     d = service.create_reply_draft(session, fake_formatter, "555", "元の投稿", "someone")
     assert d.kind == DraftKind.REPLY
     service.approve_draft(session, d)
-    service.post_draft(session, fake_x, d, settings=_settings())
-    assert fake_x.posted[0]["reply_to"] == "555"
+    with pytest.raises(PolicyViolation):
+        service.post_draft(session, fake_x, d, settings=_settings())
+    assert fake_x.posted == []  # APIには一切送らない
 
 
 def test_quote_uses_quote_id(session, fake_formatter, fake_x):
@@ -204,7 +206,7 @@ def test_quote_command_stores_target_text(session, fake_formatter):
 # --- 指令フローのリプライ(URL指定で自分の文を返信) ------------------------
 
 def test_reply_command_formats_user_comment(session, fake_formatter, fake_x):
-    """指令フローのリプライ: 自分の文を整形し、元ポスト本文も保持して in_reply_to で投稿。"""
+    """指令フローのリプライ: 自分の文を整形し元ポスト本文も保持。送信はX APIの制限で不可(手動)。"""
     d = service.create_reply_command_draft(
         session, fake_formatter, "888", "自分の返信文",
         target_handle="someone", target_text="相手の元ポスト",
@@ -214,9 +216,8 @@ def test_reply_command_formats_user_comment(session, fake_formatter, fake_x):
     assert d.source_text == "自分の返信文"
     assert d.target_text == "相手の元ポスト"
     service.approve_draft(session, d)
-    service.post_draft(session, fake_x, d, settings=_settings())
-    assert fake_x.posted[0]["reply_to"] == "888"
-    assert "自分の返信文" in fake_x.posted[0]["text"]
+    with pytest.raises(PolicyViolation):
+        service.post_draft(session, fake_x, d, settings=_settings())
 
 
 def test_reply_command_raw_skips_formatter(session, fake_x):
@@ -227,11 +228,10 @@ def test_reply_command_raw_skips_formatter(session, fake_x):
     d = service.create_reply_command_draft(
         session, BoomFormatter(), "999", "そのままの返信文", raw=True
     )
-    assert d.kind == DraftKind.REPLY
+    assert d.kind == DraftKind.REPLY  # raw下書きはformatterを呼ばず作成できる
     service.approve_draft(session, d)
-    service.post_draft(session, fake_x, d, settings=_settings())
-    assert fake_x.posted[0]["reply_to"] == "999"
-    assert fake_x.posted[0]["text"] == "そのままの返信文"
+    with pytest.raises(PolicyViolation):  # 送信はX APIの制限で不可(手動)
+        service.post_draft(session, fake_x, d, settings=_settings())
 
 
 # --- 取消(ゴミ箱)・復元 ----------------------------------------------------

@@ -26,6 +26,13 @@ function tweetUrl(me: Me | null, id: string): string {
   return me?.username ? `https://x.com/${me.username}/status/${id}` : `https://x.com/i/web/status/${id}`;
 }
 
+// 返信先(相手の元ツイート)を開くURL。返信はAPI送信できないので、ここを開いて手動返信する。
+function replyTargetUrl(d: Draft): string {
+  return d.target_handle
+    ? `https://x.com/${d.target_handle}/status/${d.target_tweet_id}`
+    : `https://x.com/i/web/status/${d.target_tweet_id}`;
+}
+
 const KIND_LABEL: Record<string, string> = { reply: "返信", quote: "引用RT", post: "投稿" };
 
 export default function Inbox({ me }: { me: Me | null }) {
@@ -111,6 +118,8 @@ export default function Inbox({ me }: { me: Me | null }) {
   const quotes = items.filter((d) => d.kind === "quote");
 
   function renderCard(d: Draft) {
+    // 返信はX APIの制限(未engage会話への返信=403)で送信できない → 手動送信導線にする。
+    const isReply = d.kind === "reply";
     return (
       <DraftCard
         key={d.id}
@@ -120,29 +129,44 @@ export default function Inbox({ me }: { me: Me | null }) {
           reload();
         }}
         actions={
-          <>
-            <Button size="sm" variant="danger" onClick={() => setPending(d)}>
-              承認して送信
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                act(async () => {
-                  await api.approve(d.id);
-                  toast({
-                    tone: "success",
-                    message: "承認しました。Queueの「承認済み」タブで予約・投稿できます。",
-                  });
-                })
-              }
-            >
-              承認のみ
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
-              却下
-            </Button>
-          </>
+          isReply ? (
+            <>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => window.open(replyTargetUrl(d), "_blank", "noopener")}
+              >
+                Xで返信（手動）
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
+                却下
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" variant="danger" onClick={() => setPending(d)}>
+                承認して送信
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  act(async () => {
+                    await api.approve(d.id);
+                    toast({
+                      tone: "success",
+                      message: "承認しました。Queueの「承認済み」タブで予約・投稿できます。",
+                    });
+                  })
+                }
+              >
+                承認のみ
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
+                却下
+              </Button>
+            </>
+          )
         }
       />
     );
@@ -196,6 +220,11 @@ export default function Inbox({ me }: { me: Me | null }) {
       {items.length === 0 && <div className="text-sm text-zinc-500">承認待ちの案はありません。</div>}
 
       <div className="space-y-6">
+        {replies.length > 0 && (
+          <p className="text-xs text-amber-300/90">
+            返信はX側の制限でアプリから送信できません。「Xで返信（手動）」で開いて、本文をコピーして手動で投稿してください。
+          </p>
+        )}
         {section("返信案", "sky", replies)}
         {section("引用案（引用RT）", "violet", quotes)}
       </div>

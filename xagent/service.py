@@ -567,6 +567,14 @@ def post_draft(
     if not decision.allowed:
         raise PolicyViolation(decision.reason)
 
+    # 返信(リプライ)はX APIの制限で自動送信できない: 自分が言及/絡みを受けていない他人の
+    # 会話への返信は403(手動UIのみ可)。下書き生成までにとどめ、送信は手動で行う運用とする。
+    if draft.kind == DraftKind.REPLY:
+        raise PolicyViolation(
+            "返信(リプライ)はX APIの制限で送信できません"
+            "（自分が絡まれていない会話への返信は403）。Xで開いて手動返信してください。"
+        )
+
     if draft.kind == DraftKind.REPOST:
         # 通常リポスト(コメント無し)。本文は不要、対象IDをRTする。
         if not draft.target_tweet_id:
@@ -591,13 +599,7 @@ def post_draft(
     if media_paths:
         media_ids = [x_client.upload_media(p) for p in media_paths]
 
-    if draft.kind == DraftKind.REPLY:
-        ids = [
-            x_client.post(
-                segments[0], in_reply_to_tweet_id=draft.target_tweet_id, media_ids=media_ids
-            )
-        ]
-    elif draft.kind == DraftKind.QUOTE:
+    if draft.kind == DraftKind.QUOTE:
         ids = [_post_quote(x_client, segments[0], draft, media_ids)]
     else:  # POST(スレッド対応)
         ids = x_client.post_thread(segments, media_ids_first=media_ids)
