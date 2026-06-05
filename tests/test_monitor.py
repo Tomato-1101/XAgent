@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from xagent import monitor
 from xagent.models import Draft, DraftKind, EngageTarget, MonitorCursor, TargetKind
 from sqlmodel import select
@@ -180,3 +182,22 @@ def test_max_drafts_zero_creates_nothing(session, fake_formatter):
     fx = FakeXClient(mentions=[{"id": "101", "text": "m", "author_id": "u1"}])
     res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
     assert res == {"reply_suggestions": 0, "quote_suggestions": 0}
+
+
+def test_within_age_skips_old_posts(session, fake_formatter):
+    """3日より古い投稿にはリプ案を作らない(新しいものだけ対象・乱造/無意味リプ防止)。"""
+    now = datetime.now(timezone.utc)
+    fx = FakeXClient(mentions=[
+        {"id": "1", "text": "古い", "author_id": "u1", "created_at": now - timedelta(days=5)},
+        {"id": "2", "text": "新しい", "author_id": "u1", "created_at": now - timedelta(hours=2)},
+    ])
+    n = monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me")
+    assert n == 1
+    d = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).one()
+    assert d.target_tweet_id == "2"  # 新しい方だけ採用
+
+
+def test_within_age_passes_when_created_at_missing(session, fake_formatter):
+    """created_at が無いツイートは判定不能として通す(従来挙動・テスト互換)。"""
+    fx = FakeXClient(mentions=[{"id": "9", "text": "日時なし", "author_id": "u1"}])
+    assert monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me") == 1

@@ -6,15 +6,18 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from sqlmodel import Session, select
 
 from .formatter import Formatter
 from .models import EngageTarget, MonitorCursor, MonitorSettings, TargetKind
-from .service import create_reply_draft
+from .service import create_reply_draft, to_naive_utc
 from .x_client import XClient
 
 FOLLOWING_MAX_ACCOUNTS = 20  # フォロー中巡回の1ティック上限(コスト抑制)
 LIST_MEMBERS_MAX = 500       # リスト連携で展開するメンバー数の上限
+TARGET_MAX_AGE_DAYS = 3      # これより古い投稿にはリプ案を作らない(古いリプは無意味・乱造防止)
 
 
 def get_monitor_settings(session: Session) -> MonitorSettings:
@@ -76,13 +79,33 @@ def _cap_oldest(tweets: list[dict], limit: int | None) -> list[dict]:
     )[:limit]
 
 
+def _within_age(
+    tweets: list[dict], max_age_days: int = TARGET_MAX_AGE_DAYS, now: datetime | None = None
+) -> list[dict]:
+    """投稿日時が max_age_days 以内のツイートだけに絞る(古い投稿への無意味なリプ案を防ぐ)。
+
+    created_at(tweepy の aware datetime)を naive UTC に正規化して比較する。created_at が
+    取れないものは判定不能として通す(実データは created_at を必ず持つ。テスト互換のため)。
+    """
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    cutoff = now - timedelta(days=max_age_days)
+    out = []
+    for t in tweets:
+        dt = to_naive_utc(t.get("created_at"))
+        if dt is None or dt >= cutoff:
+            out.append(t)
+    return out
+
+
 def poll_mentions(
     session: Session, x_client: XClient, formatter: Formatter, me_user_id: str,
     limit: int | None = None,
 ) -> int:
     """自分宛メンションを取得し、返信案の下書きを作る。limit で生成件数を上限管理。生成件数を返す。"""
     cur = _get_cursor(session, "mentions")
-    tweets = _cap_oldest(x_client.get_mentions(me_user_id, since_id=cur.last_seen_id), limit)
+    tweets = _cap_oldest(
+        _within_age(x_client.get_mentions(me_user_id, since_id=cur.last_seen_id)), limit
+    )
     created = 0
     for t in tweets:
         create_reply_draft(
@@ -116,7 +139,8 @@ def poll_targets(
         remaining = None if limit is None else limit - created
         cur = _get_cursor(session, f"target:{target.user_id}")
         tweets = _cap_oldest(
-            x_client.get_user_timeline(target.user_id, since_id=cur.last_seen_id), remaining
+            _within_age(x_client.get_user_timeline(target.user_id, since_id=cur.last_seen_id)),
+            remaining,
         )
         for t in tweets:
             create_reply_draft(
@@ -161,7 +185,8 @@ def poll_lists(
             remaining = None if limit is None else limit - created
             cur = _get_cursor(session, f"target:{uid}")
             tweets = _cap_oldest(
-                x_client.get_user_timeline(uid, since_id=cur.last_seen_id), remaining
+                _within_age(x_client.get_user_timeline(uid, since_id=cur.last_seen_id)),
+                remaining,
             )
             for t in tweets:
                 create_reply_draft(
@@ -195,7 +220,8 @@ def poll_genre(
         remaining = None if limit is None else limit - created
         cur = _get_cursor(session, f"genre:{target.keyword}")
         tweets = _cap_oldest(
-            x_client.search_recent(target.keyword, since_id=cur.last_seen_id), remaining
+            _within_age(x_client.search_recent(target.keyword, since_id=cur.last_seen_id)),
+            remaining,
         )
         for t in tweets:
             create_reply_draft(
@@ -227,7 +253,8 @@ def poll_following(
         remaining = None if limit is None else limit - created
         cur = _get_cursor(session, f"follow:{uid}")
         tweets = _cap_oldest(
-            x_client.get_user_timeline(uid, since_id=cur.last_seen_id), remaining
+            _within_age(x_client.get_user_timeline(uid, since_id=cur.last_seen_id)),
+            remaining,
         )
         for t in tweets:
             create_reply_draft(

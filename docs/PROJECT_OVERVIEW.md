@@ -615,7 +615,7 @@ CLI とほぼ対応する。差分・専用ツール:
 
 ### 受信監視・絡み案生成(`monitor.run_once`)
 
-`run_once(session, x_client, formatter, me_user_id, max_drafts=None) -> {"reply_suggestions": replies, "quote_suggestions": 0}` が1監視サイクル。**全ソースがリプライ案(kind=reply)を生成する**(対象アカウントへの絡みも引用案→リプに統一したため `quote_suggestions` は常に0)。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。
+`run_once(session, x_client, formatter, me_user_id, max_drafts=None) -> {"reply_suggestions": replies, "quote_suggestions": 0}` が1監視サイクル。**全ソースがリプライ案(kind=reply)を生成する**(対象アカウントへの絡みも引用案→リプに統一したため `quote_suggestions` は常に0)。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。各ソースは取得後、**投稿日時が3日以内(`TARGET_MAX_AGE_DAYS=3`)のものだけに絞る(`_within_age`)**＝古い投稿への無意味なリプ案・初回大量取得による乱造を防ぐ(`created_at` が取れないものは判定不能として通す)。
 
 `budget`(手動1回実行で `max_drafts` を渡せばその回限りの上限、未指定は `cfg.max_drafts_per_run`)を**全ソース横断の総生成数バジェット**として共有。各ソースは下表の順で、`budget > 0` かつ対応トグルが ON のときだけ呼ばれ、生成数を `budget` から減算する(先着順・優先度固定)。
 
