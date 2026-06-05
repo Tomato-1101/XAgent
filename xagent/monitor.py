@@ -97,6 +97,15 @@ def _within_age(
     return out
 
 
+def _drop_retweets(tweets: list[dict]) -> list[dict]:
+    """単純リポスト(コメント無しRT)を除外する。本人のポストと引用RT(本人のコメント有り)だけ残す。
+
+    単純RTは本文が 'RT @<user>: ...' で始まる(公式API・twitterapi.io 共通の慣習)。引用RTは
+    本人のコメントが本文に入るため 'RT @' では始まらず残る。リポストには反応しない方針。
+    """
+    return [t for t in tweets if not str(t.get("text", "")).startswith("RT @")]
+
+
 def poll_mentions(
     session: Session, x_client: XClient, formatter: Formatter, me_user_id: str,
     limit: int | None = None,
@@ -104,7 +113,8 @@ def poll_mentions(
     """自分宛メンションを取得し、返信案の下書きを作る。limit で生成件数を上限管理。生成件数を返す。"""
     cur = _get_cursor(session, "mentions")
     tweets = _cap_oldest(
-        _within_age(x_client.get_mentions(me_user_id, since_id=cur.last_seen_id)), limit
+        _within_age(_drop_retweets(x_client.get_mentions(me_user_id, since_id=cur.last_seen_id))),
+        limit,
     )
     created = 0
     for t in tweets:
@@ -139,7 +149,11 @@ def poll_targets(
         remaining = None if limit is None else limit - created
         cur = _get_cursor(session, f"target:{target.user_id}")
         tweets = _cap_oldest(
-            _within_age(x_client.get_user_timeline(target.user_id, since_id=cur.last_seen_id)),
+            _within_age(
+                _drop_retweets(
+                    x_client.get_user_timeline(target.user_id, since_id=cur.last_seen_id)
+                )
+            ),
             remaining,
         )
         for t in tweets:
@@ -185,7 +199,9 @@ def poll_lists(
             remaining = None if limit is None else limit - created
             cur = _get_cursor(session, f"target:{uid}")
             tweets = _cap_oldest(
-                _within_age(x_client.get_user_timeline(uid, since_id=cur.last_seen_id)),
+                _within_age(
+                    _drop_retweets(x_client.get_user_timeline(uid, since_id=cur.last_seen_id))
+                ),
                 remaining,
             )
             for t in tweets:
@@ -220,7 +236,9 @@ def poll_genre(
         remaining = None if limit is None else limit - created
         cur = _get_cursor(session, f"genre:{target.keyword}")
         tweets = _cap_oldest(
-            _within_age(x_client.search_recent(target.keyword, since_id=cur.last_seen_id)),
+            _within_age(
+                _drop_retweets(x_client.search_recent(target.keyword, since_id=cur.last_seen_id))
+            ),
             remaining,
         )
         for t in tweets:
@@ -253,7 +271,9 @@ def poll_following(
         remaining = None if limit is None else limit - created
         cur = _get_cursor(session, f"follow:{uid}")
         tweets = _cap_oldest(
-            _within_age(x_client.get_user_timeline(uid, since_id=cur.last_seen_id)),
+            _within_age(
+                _drop_retweets(x_client.get_user_timeline(uid, since_id=cur.last_seen_id))
+            ),
             remaining,
         )
         for t in tweets:

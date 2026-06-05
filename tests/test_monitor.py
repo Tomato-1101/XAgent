@@ -201,3 +201,19 @@ def test_within_age_passes_when_created_at_missing(session, fake_formatter):
     """created_at が無いツイートは判定不能として通す(従来挙動・テスト互換)。"""
     fx = FakeXClient(mentions=[{"id": "9", "text": "日時なし", "author_id": "u1"}])
     assert monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me") == 1
+
+
+def test_drops_simple_retweets(session, fake_formatter):
+    """単純リポスト(RT @…)には反応せず、本人のポストと引用RT(本人コメント有り)だけにリプ案を作る。"""
+    session.add(EngageTarget(kind=TargetKind.MANUAL, handle="famous", user_id="u9", active=True))
+    session.commit()
+    now = datetime.now(timezone.utc)
+    fx = FakeXClient(timelines={"u9": [
+        {"id": "1", "text": "RT @other: 他人の投稿", "author_id": "u9", "created_at": now},
+        {"id": "2", "text": "これ良いね！ https://t.co/x", "author_id": "u9", "created_at": now},
+        {"id": "3", "text": "本人のオリジナル投稿", "author_id": "u9", "created_at": now},
+    ]})
+    n = monitor.poll_targets(session, fx, fake_formatter)
+    assert n == 2  # 単純RT(id=1)を除いた2件
+    ids = {d.target_tweet_id for d in session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()}
+    assert ids == {"2", "3"}
