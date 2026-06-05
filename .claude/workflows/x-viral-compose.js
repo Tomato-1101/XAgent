@@ -10,8 +10,9 @@ export const meta = {
 }
 
 // 使い方: Workflow({ name: 'x-viral-compose', args: 'Claude Code活用術5選' })
-// 返り値の winner.text を確認し createCommand(`xagent compose --raw "..."`)を実行すると
-// 承認待ちの下書きが作られる。投稿そのものは人間が承認してから(自動投稿はしない)。
+// 返り値の winner.text を Write ツールで /tmp/xagent_body.txt に保存してから createCommand を実行すると
+// 承認待ちの下書きが作られる。本文をシェルに直書きするとtool callのJSONが壊れるため必ずファイル経由。
+// 投稿そのものは人間が承認してから(自動投稿はしない)。
 
 const RESEARCH_SCHEMA = {
   type: 'object',
@@ -97,6 +98,7 @@ return {
   topic,
   winner,
   candidates: ranked,
-  createCommand: winner ? `xagent compose --raw ${JSON.stringify(winner.text)}` : null,
-  note: 'winner.text を確認し createCommand を実行すると承認待ちの下書きが作られる。投稿は人間承認のみ。',
+  bodyPath: '/tmp/xagent_body.txt',
+  createCommand: winner ? 'xagent compose --raw "$(cat /tmp/xagent_body.txt)"' : null,
+  note: 'winner.text を Write ツールで /tmp/xagent_body.txt に保存してから createCommand を実行すると承認待ちの下書きが作られる（本文をシェルに直書きするとtool callのJSONが壊れ「could not be parsed」で止まるため必ずファイル経由）。投稿は人間承認のみ。',
 }

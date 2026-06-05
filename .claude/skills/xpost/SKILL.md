@@ -18,9 +18,12 @@ CLI は `xagent`（リポジトリの venv で `pip install -e .` 済み前提�
    ハッシュタグ控えめ）を守る。
 3. **本文を書く**: 選んだ型で最終本文を書き上げる。
 4. **下書き作成**: 自分で書いた最終文は再整形しないため `--raw` で投入する。
-   `xagent compose --raw "<本文>"`
-   - 雑メモを XAgent の整形に任せる場合は `--raw` なし: `xagent compose "<メモ>"`
-   - 言い回し違いを複数出す: `xagent compose "<メモ>" --variations 3`
+   **本文は必ず一時ファイル経由で渡す（改行や " を含む本文をシェル引数に直書きしない）**:
+   まず Write ツールで本文を `/tmp/xagent_body.txt` に保存し、次を実行する。
+   `xagent compose --raw "$(cat /tmp/xagent_body.txt)"`
+   - 理由: 改行・引用符入りの本文を `--raw "<本文>"` と直書きすると Bash ツールの引数JSONが壊れ、「The model's tool call could not be parsed」で停止する。ファイル経由なら Bash 引数に本文が乗らないので壊れない。
+   - 雑メモを XAgent の整形に任せる場合（短い1行のみ）は直書き可: `xagent compose "<メモ>"`
+   - 言い回し違いを複数出す: `xagent compose "$(cat /tmp/xagent_body.txt)" --variations 3`
    - 長文で「さらに表示」を狙う: `--long`
 5. **提示**: 出力の `#<id>` と本文をユーザーに見せ、OK か尋ねる。修正指示があれば作り直す。
 6. **承認・投稿/予約**（ユーザーがOKしてから）:
@@ -29,8 +32,9 @@ CLI は `xagent`（リポジトリの venv で `pip install -e .` 済み前提�
 
 ## 絡み（リプライ / 引用 / 受信監視）
 - **このポストにこう絡んで（自分の文で）**: URL を渡してリプライ/引用の下書きを作る。元ポスト本文も保存される。
-  - リプライ: `xagent reply <URL> "<返信文>"`（`--raw` で整形なし）
-  - 引用RT: `xagent quote <URL> "<コメント>"`
+  - リプライ: 本文を Write で `/tmp/xagent_body.txt` に保存 → `xagent reply <URL> "$(cat /tmp/xagent_body.txt)" --raw`
+  - 引用RT: 同様に保存 → `xagent quote <URL> "$(cat /tmp/xagent_body.txt)" --raw`
+  - 改行や " を含まない短い1行返信に限り直書き可: `xagent reply <URL> "<返信文>" --raw`
 - **受信監視で絡み案を生成**: `xagent monitor-once`（メンション返信案・対象アカウントへの絡み案を下書き化）
 - 一覧 → 確認 → 承認 → 送信: `xagent list --status draft --json` → `approve` → `post`
 
@@ -45,6 +49,7 @@ CLI は `xagent`（リポジトリの venv で `pip install -e .` 済み前提�
 - 絡む相手を追加: `xagent targets-add @handle`
 
 ## 重要な原則
+- **本文をシェル引数に直書きしない**。改行・引用符を含む投稿/返信本文は必ず Write ツールで `/tmp/xagent_body.txt` に保存し、`"$(cat /tmp/xagent_body.txt)"` で渡す。直書きすると tool call の引数JSONが壊れ「The model's tool call could not be parsed」で停止する。
 - **承認なしに `post` しない**。必ずユーザーの承認を得てから投稿する。下書き作成・予約までが自走の範囲。
 - 投稿頻度ガード（1日上限・連投間隔）・制限時間帯に引っかかったら理由をユーザーに伝える。
 - X / Anthropic の資格情報が未設定なら、`.env`（`env.example` 参照）の設定を案内する。
