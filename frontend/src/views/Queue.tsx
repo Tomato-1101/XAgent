@@ -87,11 +87,12 @@ export default function Queue({ me }: { me: Me | null }) {
 
   function reload() {
     // 下書きタブのみ自分の投稿(post)に限定(返信/引用の下書きはInbox側で扱う)。
-    // 承認済み/予約/投稿済み/取消は全種を表示し、承認後の返信もここで予約・投稿できるようにする。
+    // 返信(reply)はAPI投稿できずInboxで手動送信するため、全タブでQueueから分離する。
     const kind = status === "draft" ? "post" : undefined;
     api
       .listDrafts(status, kind)
-      .then((rows) => {
+      .then((rows0) => {
+        const rows = rows0.filter((d) => d.kind !== "reply");
         if (status === "queued") {
           const sorted = [...rows].sort((a, b) =>
             (a.scheduled_at ?? "").localeCompare(b.scheduled_at ?? "")

@@ -80,6 +80,24 @@ export default function Inbox({ me }: { me: Me | null }) {
     }
   }
 
+  // 返信はAPI送信できないので「本文をコピー」+「元ポストを別タブで開く」を1操作にまとめる。
+  // ポップアップブロック回避のため、クリック同期内で先にタブを開いてからコピーする。
+  function copyAndOpen(d: Draft) {
+    const text = d.segments.join("\n");
+    window.open(replyTargetUrl(d), "_blank", "noopener");
+    navigator.clipboard
+      .writeText(text)
+      .then(() =>
+        toast({
+          tone: "success",
+          message: "返信文をコピーし、元ポストを開きました。返信欄に貼り付けて投稿してください。",
+        })
+      )
+      .catch(() =>
+        toast({ tone: "error", message: "コピーに失敗しました。本文を手動で選択してください。" })
+      );
+  }
+
   // 「送信する」→ 制限帯ゲート(警告→最終確認)を通してから即時送信
   function confirmSend() {
     if (!pending) return;
@@ -131,12 +149,8 @@ export default function Inbox({ me }: { me: Me | null }) {
         actions={
           isReply ? (
             <>
-              <Button
-                size="sm"
-                variant="danger"
-                onClick={() => window.open(replyTargetUrl(d), "_blank", "noopener")}
-              >
-                Xで返信（手動）
+              <Button size="sm" variant="danger" onClick={() => copyAndOpen(d)}>
+                コピーして元ポストを開く
               </Button>
               <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
                 却下
@@ -222,7 +236,7 @@ export default function Inbox({ me }: { me: Me | null }) {
       <div className="space-y-6">
         {replies.length > 0 && (
           <p className="text-xs text-amber-300/90">
-            返信はX側の制限でアプリから送信できません。「Xで返信（手動）」で開いて、本文をコピーして手動で投稿してください。
+            返信はX側の制限でアプリから送信できません。「コピーして元ポストを開く」を押すと返信文をコピーして相手のポストを別タブで開くので、返信欄に貼り付けて投稿してください。
           </p>
         )}
         {section("返信案", "sky", replies)}
