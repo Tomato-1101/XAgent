@@ -33,6 +33,7 @@ class FakeFormatter:
     def __init__(self):
         self.playbooks = []          # 整形に渡された playbook を順に記録
         self.complete_return = None  # set すると complete() がこれを返す
+        self.engage_type_return = "reply"  # decide_engage_type の戻り(テストで切替)
 
     def format_post(
         self, source_text, style_guide="", allow_long=False,
@@ -61,6 +62,9 @@ class FakeFormatter:
                        playbook=""):
         self.playbooks.append(playbook)
         return FormatResult([f"引用案: {target_text[:10]}"], folded=False)
+
+    def decide_engage_type(self, target_text, target_handle=""):
+        return self.engage_type_return
 
     def complete(self, system, user):
         if self.complete_return is not None:

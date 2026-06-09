@@ -73,6 +73,19 @@ export interface Me {
   username: string | null;
 }
 
+// 予約スケジューラ(予約投稿の常駐)の稼働状況。/status の戻り。
+export interface SchedulerStatus {
+  scheduler_enabled: boolean;
+  scheduler_running: boolean;
+  healthy: boolean; // 予約発火ループが生きているか(ハートビート鮮度＋稼働)
+  last_queue_tick_at: string | null; // 直近のqueue_tick発火時刻(naive UTC ISO)
+  seconds_since_queue_tick: number | null;
+  queue_interval_seconds: number;
+  next_queue_run_at: string | null;
+  posting_enabled: boolean; // 緊急停止(false=全投稿停止)
+  auto_monitor_enabled: boolean; // 絡み案の自動生成トグル
+}
+
 export interface AccountProfile {
   id: number;
   handle: string;

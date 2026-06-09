@@ -370,9 +370,11 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 ### 監視・絡み(§10 に動作詳細)
 
-- **監視ソース**: メンション(reply案、**既定オフ=手動返信方針**)/手動MANUAL対象(reply+quote案)/Xリスト(reply+quote案)/ジャンルkeyword(reply+quote案、既定オフ)/フォロー中(reply+quote案、既定オフ)。絡み対象は**本人オリジナル投稿のみ**(RT・引用RT・3日超は除外)。
+- **監視ソース**: メンション(reply案、**既定オフ=手動返信方針**)/手動MANUAL対象/Xリスト/ジャンルkeyword(既定オフ)/フォロー中(既定オフ)。絡み対象は**本人オリジナル投稿のみ**(RT・引用RT・3日超は除外)。
+- **AIが絡み方を1案に判断(`_emit_engage_drafts` → `formatter.decide_engage_type`)**: 1投稿につき返信案・引用案を両方作らず、AI が「reply / quote」のどちらが効果的かを判断して**良い方の1案だけ**生成する(コスト・件数を半減。迷えば reply)。`run_once` の総生成数バジェット(`max_drafts_per_run`)では1投稿=1件として数える。メンション(自分宛)は引用RTせず常に reply。
 - **絡み対象(EngageTarget)**: MANUAL(user_id 直接)/LIST(list_id を毎回メンバー展開)/GENRE(keyword 検索)/FOLLOWING(Enum はあるが poll は EngageTarget を読まず自分のフォローを直接巡回)。
 - **返信/引用生成(generate_reply / generate_quote)**: 相手投稿から AI が本文生成。返信は `_REPLY_LENGTH_BANDS` から `random.choice` で長さ帯を選び、毎回同じ長さに寄るのを防ぐ。常に1セグメント(分割しない)、140字厳守。
+- **型の事後切替(`service.recast_engage_draft` / `POST /drafts/{id}/recast`)**: AI が選んだ型を人が上書きする導線。未承認(DRAFT)の REPLY⇄QUOTE 間でのみ、新しい型で本文を再生成し `kind` を差し替える(元ポスト情報は維持)。Inbox の「引用RTで送る」「手動で返信に切替」ボタンから呼ぶ。DRAFT 以外/POST 種別は `PolicyViolation`(API は 409)。
 
 ### X ネイティブ「リスト」
 
@@ -393,7 +395,11 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 ## 7. APIエンドポイント一覧
 
-全ルータは `dependencies=[Depends(require_api_token)]` を APIRouter レベルで付与。`config.api_token` 設定時のみ `X-API-Token` ヘッダ必須(未設定なら認証なしで開放=既定)。`/health` と `/me` は常に開放。
+全ルータは `dependencies=[Depends(require_api_token)]` を APIRouter レベルで付与。`config.api_token` 設定時のみ `X-API-Token` ヘッダ必須(未設定なら認証なしで開放=既定)。ルート直下の `/health`・`/me`・`/status` は常に開放。
+
+- `GET /health` — `{status, version}`。
+- `GET /me` — 現在の投稿先アカウント(`get_me`、失敗時 `{id:null, username:null}`)。
+- `GET /status` — **予約スケジューラの稼働状況**。`{scheduler_enabled, scheduler_running, healthy, last_queue_tick_at, seconds_since_queue_tick, queue_interval_seconds, next_queue_run_at, posting_enabled, auto_monitor_enabled}`。`healthy` はハートビート(直近の `queue_tick` 発火時刻、`daemon._last_queue_tick_at`)が間隔の3倍以内＝スレッド生存かで判定。起動直後で未発火なら猶予で稼働扱い(lifespan で queue ジョブを `next_run_time=now` にして即発火させハートビートを立てる)。フロントは App のサイドバーで「予約スケジューラ 稼働中/停止?」バッジに使う(`api.status()` を10秒間隔ポーリング)。
 
 ### 共通基盤(deps.py)
 
@@ -428,6 +434,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 | POST | `/drafts/{id}/reject` | 却下 | 404/409 |
 | POST | `/drafts/{id}/cancel` | 取消(予約は自動投稿もキャンセル、投稿済みは不可) | 404/409 |
 | POST | `/drafts/{id}/restore` | ゴミ箱から復元 | 404/409 |
+| POST | `/drafts/{id}/recast` | 絡みの型切替: リプライ⇄引用RTで本文再生成し `kind` 差替(`{"to":"reply"\|"quote"}`)。未承認のREPLY/QUOTEのみ | 404/409 |
 | POST | `/drafts/{id}/queue` | キューへ(最適/指定時刻) | 404/409 |
 | POST | `/drafts/{id}/post` | 即時投稿 | 404/409/423/502 |
 
@@ -616,7 +623,7 @@ CLI とほぼ対応する。差分・専用ツール:
 
 ### 受信監視・絡み案生成(`monitor.run_once`)
 
-`run_once(session, x_client, formatter, me_user_id, max_drafts=None) -> {"reply_suggestions": replies, "quote_suggestions": quotes}` が1監視サイクル。**絡み対象(手動MANUAL/リストLIST/ジャンルGENRE/フォロー)の新規投稿には、1投稿につき返信案(kind=reply)と引用案(kind=quote/引用RT)の両方を生成する**(`_emit_engage_drafts`。人間がどちらで絡むか選べるように。返信はAPI送信不可で手動・引用RTは送信可)。**自分宛メンションは返信案のみ**(自分宛は引用RTしないので `quote_suggestions` には乗らない)。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。各ソースは取得後、**投稿日時が3日以内(`TARGET_MAX_AGE_DAYS=3`)のものだけに絞る(`_within_age`)**＝古い投稿への無意味なリプ案・初回大量取得による乱造を防ぐ(`created_at` が取れないものは判定不能として通す)。さらに**リポスト(単純RT・引用RT)は除外(`_drop_reposts`)**し、**対象アカウントの本人オリジナル投稿だけ**に反応する。判定は正規化辞書の `is_repost`(twitterapi.io は `retweeted_tweet`/`quoted_tweet` の有無、公式API は `referenced_tweets` の type=retweeted/quoted)＋後方互換の本文 `RT @` 始まり。**自分宛メンション(自分のポストへの返信)は既定OFF**(`mentions_enabled=False`、手動で返す方針)。これらの対象ルールは memory `xagent-monitor-targeting-rules` に恒久記録。生成数バジェット(`max_drafts_per_run`)は全ソース・返信/引用を合算した共有上限(残り1件のときは返信のみ作る)。
+`run_once(session, x_client, formatter, me_user_id, max_drafts=None) -> {"reply_suggestions": replies, "quote_suggestions": quotes}` が1監視サイクル。**絡み対象(手動MANUAL/リストLIST/ジャンルGENRE/フォロー)の新規投稿には、1投稿につきAIが返信案(kind=reply)と引用案(kind=quote/引用RT)の良い方を判断して1件だけ生成する**(`_emit_engage_drafts` → `formatter.decide_engage_type`。両方は作らずコスト・件数を半減。迷えば reply。型を変えたいときは Inbox の切替ボタン=`recast_engage_draft` で後から作り直す)。**自分宛メンションは返信案のみ**(自分宛は引用RTしないので `quote_suggestions` には乗らない)。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。各ソースは取得後、**投稿日時が3日以内(`TARGET_MAX_AGE_DAYS=3`)のものだけに絞る(`_within_age`)**＝古い投稿への無意味なリプ案・初回大量取得による乱造を防ぐ(`created_at` が取れないものは判定不能として通す)。さらに**リポスト(単純RT・引用RT)は除外(`_drop_reposts`)**し、**対象アカウントの本人オリジナル投稿だけ**に反応する。判定は正規化辞書の `is_repost`(twitterapi.io は `retweeted_tweet`/`quoted_tweet` の有無、公式API は `referenced_tweets` の type=retweeted/quoted)＋後方互換の本文 `RT @` 始まり。**自分宛メンション(自分のポストへの返信)は既定OFF**(`mentions_enabled=False`、手動で返す方針)。これらの対象ルールは memory `xagent-monitor-targeting-rules` に恒久記録。生成数バジェット(`max_drafts_per_run`)は全ソースで共有する総生成数上限(1投稿=1件として数える)。
 
 `budget`(手動1回実行で `max_drafts` を渡せばその回限りの上限、未指定は `cfg.max_drafts_per_run`)を**全ソース横断の総生成数バジェット**として共有。各ソースは下表の順で、`budget > 0` かつ対応トグルが ON のときだけ呼ばれ、生成数を `budget` から減算する(先着順・優先度固定)。
 
@@ -667,9 +674,11 @@ override: `ensure_not_blackout(in_blackout, override, reason)` は `in_blackout 
 | 関数 | ゲート | 動作 |
 |---|---|---|
 | `monitor_tick()` | `auto_monitor_enabled` が OFF(既定) なら**即 return**(`XClient.from_settings` すら呼ばず API 消費ゼロ)。API常駐スケジューラに登録され、UIトグルONの時だけ実処理 | `get_me()` → `monitor.run_once(...)`。提案が1件以上なら `notify` で承認待ち通知。下書きのみ生成・自動投稿しない |
-| `queue_tick()` | ゲートなし(**常時実行**。「予約投稿は止めない」方針) | `process_due_queue(...)` |
+| `queue_tick()` | ゲートなし(**常時実行**。「予約投稿は止めない」方針) | 発火のたびモジュール変数 `_last_queue_tick_at`(naive UTC)を更新(X資格情報の有無に関わらず先に。`/status` のハートビート)→ `process_due_queue(...)` |
 
 緊急停止の責務分担: 全投稿停止は `config.posting_enabled`、個別の制限帯/頻度ガードは `process_due_queue`→`post_draft`。`auto_post_enabled` は `queue_tick` のゲートに**使われていない**(未使用)。
+
+スケジューラ稼働の可視化: `lifespan` は `app.state.scheduler` に `BackgroundScheduler` を保持し、`queue` ジョブを `next_run_time=now` で登録して起動直後に1回発火させる(ハートビート即時化)。`GET /status` がこのハートビートとジョブの `next_run_time` から `healthy` を判定し、フロント App のサイドバーで「予約スケジューラ 稼働中/停止?」バッジに表示する(起動し忘れ・ハングをUIで検知)。
 
 実運用構成: API プロセスの `lifespan` 内で `BackgroundScheduler(timezone="UTC")` が `queue`(60秒)と `monitor`(180秒、`max_instances=1`, `coalesce=True`)を登録。monitor は `auto_monitor_enabled`(既定OFF)で内部ゲートされ、UIトグルONの時だけ実処理する。`daemon.run`(`BlockingScheduler` 版、CLI `xagent daemon`)は別経路で、launchd 常駐構成では実際に回るのは内蔵スケジューラ。
 

@@ -6,14 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
 from ... import scheduler, service
+from ...formatter import Formatter
 from ...guards import BlackoutViolation, PolicyViolation
 from ...models import DraftKind, DraftStatus
 from ...x_client import XClient, XClientError
-from ..deps import db_session, get_x_client, require_api_token
+from ..deps import db_session, get_formatter, get_x_client, require_api_token
 from ..schemas import (
     DraftRead,
     PostNowRequest,
     QueueRequest,
+    RecastRequest,
     UpdateDraftRequest,
     draft_to_read,
 )
@@ -100,6 +102,26 @@ def restore(draft_id: int, session: Session = Depends(db_session)) -> DraftRead:
     d = _load(session, draft_id)
     try:
         service.restore_draft(session, d)
+    except PolicyViolation as e:
+        raise HTTPException(409, str(e))
+    return draft_to_read(d)
+
+
+@router.post("/{draft_id}/recast", response_model=DraftRead)
+def recast(
+    draft_id: int,
+    req: RecastRequest,
+    session: Session = Depends(db_session),
+    formatter: Formatter = Depends(get_formatter),
+) -> DraftRead:
+    """絡みの下書きをリプライ⇄引用RTに作り直す(本文を新しい型で再生成し kind を差し替え)。
+
+    Inboxの[引用RTで送る]/[手動で返信に切替]から呼ばれる。未承認の REPLY/QUOTE のみ可。
+    """
+    d = _load(session, draft_id)
+    to_kind = DraftKind.QUOTE if req.to == "quote" else DraftKind.REPLY
+    try:
+        service.recast_engage_draft(session, formatter, d, to_kind)
     except PolicyViolation as e:
         raise HTTPException(409, str(e))
     return draft_to_read(d)

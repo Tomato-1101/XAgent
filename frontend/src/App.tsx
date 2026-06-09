@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { Badge } from "./components/ui";
 import { ToastProvider } from "./components/Toast";
-import type { Me } from "./types";
+import type { Me, SchedulerStatus } from "./types";
 import Compose from "./views/Compose";
 import Queue from "./views/Queue";
 import Posts from "./views/Posts";
@@ -42,17 +42,30 @@ const NAV: { key: View; label: string; desc: string }[] = [
   { key: "agent", label: "Agent", desc: "Claude Codeに任せる" },
 ];
 
+/** 予約スケジューラ(予約投稿の常駐)の稼働状況をバッジ用に色とラベルへ変換する。 */
+function schedBadge(s: SchedulerStatus): { tone: "green" | "red" | "amber"; label: string } {
+  if (!s.scheduler_enabled) return { tone: "amber", label: "予約自動発火 無効(設定)" };
+  if (s.healthy) return { tone: "green", label: "予約スケジューラ 稼働中" };
+  return { tone: "red", label: "予約スケジューラ 停止?" };
+}
+
 export default function App() {
   const [view, setView] = useState<View>("compose");
   const [online, setOnline] = useState<boolean | null>(null);
   const [me, setMe] = useState<Me | null>(null);
+  const [sched, setSched] = useState<SchedulerStatus | null>(null);
 
   useEffect(() => {
-    const ping = () =>
+    const ping = () => {
       api
         .health()
         .then(() => setOnline(true))
         .catch(() => setOnline(false));
+      api
+        .status()
+        .then(setSched)
+        .catch(() => setSched(null));
+    };
     ping();
     const t = setInterval(ping, 10000);
     return () => clearInterval(t);
@@ -97,6 +110,21 @@ export default function App() {
               <Badge tone="green">API接続OK</Badge>
             ) : (
               <Badge tone="red">API未接続 (:8000)</Badge>
+            )}
+            {online && sched && (
+              <div
+                title={
+                  sched.last_queue_tick_at
+                    ? `直近の発火 ${Math.round(sched.seconds_since_queue_tick ?? 0)}秒前` +
+                      `（${sched.queue_interval_seconds}秒ごと）`
+                    : "まだ一度も発火していません"
+                }
+              >
+                <Badge tone={schedBadge(sched).tone}>{schedBadge(sched).label}</Badge>
+              </div>
+            )}
+            {online && sched && !sched.posting_enabled && (
+              <Badge tone="amber">投稿 緊急停止中</Badge>
             )}
           </div>
         </aside>

@@ -7,17 +7,19 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlmodel import Session
 
 from .. import __version__
 from ..config import get_settings
 from ..db import init_db
 from ..media import media_dir
 from ..x_client import XClient, XClientError
-from .deps import get_x_client
+from .deps import db_session, get_x_client
 from .routes import (
     analytics,
     compose,
@@ -53,9 +55,11 @@ async def lifespan(app: FastAPI):
 
         sched = BackgroundScheduler(timezone="UTC")
         # 予約投稿の発火: 常時。posting_enabled/認証・予約/制限帯/頻度ガードを通すので誤爆しない。
+        # 起動直後に1回発火させ、ハートビート(/status)を即座に立てる(再起動直後の誤「停止」表示を防ぐ)。
         sched.add_job(
             queue_tick, "interval",
             seconds=settings.scheduler_interval_seconds, id="queue",
+            next_run_time=datetime.now(timezone.utc),
         )
         # 絡み案の自動生成: auto_monitor_enabled(既定OFF)で内部制御。OFFなら即returnしAPI消費なし。
         sched.add_job(
@@ -68,6 +72,7 @@ async def lifespan(app: FastAPI):
             "常駐スケジューラを起動 (queue=%ss, monitor=%ss・auto_monitor_enabledで制御)",
             settings.scheduler_interval_seconds, settings.monitor_interval_seconds,
         )
+    app.state.scheduler = sched
     try:
         yield
     finally:
@@ -98,6 +103,51 @@ def me(x_client: XClient = Depends(get_x_client)) -> dict:
         return x_client.get_me()
     except XClientError:
         return {"id": None, "username": None}
+
+
+@app.get("/status")
+def status(session: Session = Depends(db_session)) -> dict:
+    """予約スケジューラの稼働状況。UIが「予約投稿の常駐が動いているか」を表示するための情報。
+
+    healthy=Trueなら予約発火ループが生きている。判定はハートビート(直近のqueue_tick発火時刻)が
+    間隔の3倍以内に更新されているか(=スレッド生存)。起動直後でまだ未発火のときは稼働扱い(猶予)。
+    """
+    from ..daemon import last_queue_tick_at
+    from ..monitor import get_monitor_settings
+
+    settings = get_settings()
+    sched = getattr(app.state, "scheduler", None)
+    running = bool(sched is not None and getattr(sched, "running", False))
+    interval = settings.scheduler_interval_seconds
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    last = last_queue_tick_at()
+    seconds_since = (now - last).total_seconds() if last is not None else None
+
+    next_run = None
+    if sched is not None:
+        job = sched.get_job("queue")
+        if job is not None and job.next_run_time is not None:
+            next_run = job.next_run_time.astimezone(timezone.utc).replace(tzinfo=None)
+
+    # 生存判定: 起動直後(未発火)は猶予で稼働扱い、発火後は間隔の3倍を超える未更新を「停止/ハング」とみなす。
+    fresh = seconds_since is None or seconds_since <= interval * 3
+    healthy = settings.scheduler_enabled and running and fresh
+
+    # 監視(絡み案自動生成)トグルの現値も併せて返す(UIで状態を一目で把握できるように)。
+    auto_monitor = get_monitor_settings(session).auto_monitor_enabled
+
+    return {
+        "scheduler_enabled": settings.scheduler_enabled,
+        "scheduler_running": running,
+        "healthy": healthy,
+        "last_queue_tick_at": last.isoformat() if last is not None else None,
+        "seconds_since_queue_tick": seconds_since,
+        "queue_interval_seconds": interval,
+        "next_queue_run_at": next_run.isoformat() if next_run is not None else None,
+        "posting_enabled": settings.posting_enabled,
+        "auto_monitor_enabled": auto_monitor,
+    }
 
 
 app.include_router(compose.router)

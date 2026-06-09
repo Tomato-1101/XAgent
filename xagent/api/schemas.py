@@ -102,6 +102,12 @@ class QuoteFromUrlRequest(BaseModel):
     url: str  # x.com/.../status/<id> 形式のツイートURL
 
 
+class RecastRequest(BaseModel):
+    """絡みの下書きをリプライ⇄引用RTに作り直す(Inboxの手動切替ボタン)。"""
+
+    to: str  # "reply" | "quote" — 作り直す先の型
+
+
 class TemplateRead(BaseModel):
     id: int | None
     name: str

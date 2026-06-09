@@ -232,6 +232,39 @@ def create_quote_draft(
     return _finalize_draft(session, formatter, draft, "quote")
 
 
+def recast_engage_draft(
+    session: Session, formatter: Formatter, draft: Draft, to_kind: DraftKind
+) -> Draft:
+    """絡みの下書きを「リプライ⇄引用RT」に作り直す(本文を新しい型で再生成し、kind を差し替える)。
+
+    AIが投稿ごとに片方だけ生成する方針(monitor._emit_engage_drafts)の事後切替に使う。
+    Inboxの[引用RTで送る]/[手動で返信に切替]から呼ばれる。元ポスト(target_*)は引き継ぐ。
+    未承認(DRAFT)の REPLY/QUOTE 同士の変換のみ許す。
+    """
+    pair = {DraftKind.REPLY, DraftKind.QUOTE}
+    if draft.status != DraftStatus.DRAFT:
+        raise PolicyViolation("未承認の下書きのみ型を切り替えられます。")
+    if draft.kind not in pair or to_kind not in pair:
+        raise PolicyViolation("リプライと引用RTの間でのみ切り替えられます。")
+    if draft.kind == to_kind:
+        return draft
+    if to_kind == DraftKind.QUOTE:
+        res = formatter.generate_quote(
+            draft.target_text or "", draft.target_handle or "", active_style_guide(session),
+            playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
+        )
+        note = "recast-quote"
+    else:
+        res = formatter.generate_reply(
+            draft.target_text or "", draft.target_handle or "", active_style_guide(session),
+            playbook=templates_mod.active_body(session, TemplateKind.REPLY),
+        )
+        note = "recast-reply"
+    draft.kind = to_kind
+    draft.segments_json = json.dumps(res.segments, ensure_ascii=False)
+    return _finalize_draft(session, formatter, draft, note)
+
+
 def _compose_command_segments(
     session: Session,
     formatter: Formatter,

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -20,6 +21,16 @@ from .scheduler import process_due_queue
 from .x_client import XClient, XClientError
 
 log = logging.getLogger("xagent.daemon")
+
+# スケジューラ稼働確認用ハートビート(naive UTC)。queue_tick が発火するたびに更新し、
+# /status が「予約スケジューラが実際に回っているか」を判定する。スケジューラは API と同一
+# プロセスで動くためモジュール変数を共有できる(--reload のワーカ再起動時はNoneに戻り次ティックで復帰)。
+_last_queue_tick_at: datetime | None = None
+
+
+def last_queue_tick_at() -> datetime | None:
+    """直近で queue_tick が発火した時刻(naive UTC)。未発火なら None。"""
+    return _last_queue_tick_at
 
 
 def monitor_tick() -> None:
@@ -44,6 +55,9 @@ def monitor_tick() -> None:
 def queue_tick() -> None:
     # 予約投稿の発火は常時動かす(ユーザー方針: 予約投稿は止めない)。
     # 全投稿の緊急停止は config.posting_enabled が、個別の制限帯/頻度ガードは process_due_queue が担う。
+    global _last_queue_tick_at
+    # ハートビートはX資格情報の有無に関わらず先に更新する(スケジューラの生存=ティック発火の事実を示す)。
+    _last_queue_tick_at = datetime.now(timezone.utc).replace(tzinfo=None)
     try:
         with get_session() as s:
             x = XClient.from_settings()

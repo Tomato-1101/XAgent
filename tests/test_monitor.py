@@ -19,17 +19,30 @@ def test_poll_mentions_creates_reply_drafts(session, fake_formatter):
     assert cur.last_seen_id == "101"
 
 
-def test_poll_targets_creates_reply_and_quote_drafts(session, fake_formatter):
-    """対象アカウント(MANUAL)の新規投稿には返信案と引用案の両方を作る(人間がどちらで絡むか選ぶ)。"""
+def test_poll_targets_creates_one_ai_judged_draft(session, fake_formatter):
+    """対象アカウント(MANUAL)の新規投稿には、AIが選んだ型(既定reply)で1案だけ作る。"""
     session.add(EngageTarget(kind=TargetKind.MANUAL, handle="famous", user_id="u9", active=True))
     session.commit()
     fx = FakeXClient(timelines={"u9": [{"id": "202", "text": "有名人の新規投稿", "author_id": "u9"}]})
     r, q = monitor.poll_targets(session, fx, fake_formatter)
-    assert (r, q) == (1, 1)
+    assert (r, q) == (1, 0)  # 1投稿=1案(AI判断・既定は返信)
     replies = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()
     quotes = session.exec(select(Draft).where(Draft.kind == DraftKind.QUOTE)).all()
     assert [d.target_tweet_id for d in replies] == ["202"]
+    assert quotes == []
+
+
+def test_poll_targets_quote_when_ai_picks_quote(session, fake_formatter):
+    """AIが quote と判断した投稿は引用案のみ1件作る(返信は作らない)。"""
+    fake_formatter.engage_type_return = "quote"
+    session.add(EngageTarget(kind=TargetKind.MANUAL, handle="famous", user_id="u9", active=True))
+    session.commit()
+    fx = FakeXClient(timelines={"u9": [{"id": "202", "text": "拡散したいニュース", "author_id": "u9"}]})
+    r, q = monitor.poll_targets(session, fx, fake_formatter)
+    assert (r, q) == (0, 1)
+    quotes = session.exec(select(Draft).where(Draft.kind == DraftKind.QUOTE)).all()
     assert [d.target_tweet_id for d in quotes] == ["202"]
+    assert session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all() == []
 
 
 def test_auto_run_flags_default_off_and_toggle(session):
@@ -40,8 +53,8 @@ def test_auto_run_flags_default_off_and_toggle(session):
     assert cfg.auto_monitor_enabled is True
 
 
-def test_poll_lists_expands_members_to_reply_and_quote(session, fake_formatter):
-    """kind=LIST はリストの現メンバーへ展開し、各メンバーの新規投稿に返信案＋引用案を作る。"""
+def test_poll_lists_expands_members_one_draft_each(session, fake_formatter):
+    """kind=LIST はリストの現メンバーへ展開し、各メンバーの新規投稿にAI判断で1案ずつ作る。"""
     session.add(EngageTarget(kind=TargetKind.LIST, handle="絡み候補A", list_id="L1", active=True))
     session.commit()
     fx = FakeXClient(
@@ -52,7 +65,7 @@ def test_poll_lists_expands_members_to_reply_and_quote(session, fake_formatter):
         },
     )
     r, q = monitor.poll_lists(session, fx, fake_formatter)
-    assert (r, q) == (2, 2)  # 2メンバー × (返信+引用)
+    assert (r, q) == (2, 0)  # 2メンバー × 1案(既定reply)
     replies = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()
     assert {d.target_tweet_id for d in replies} == {"202", "303"}
     assert {d.target_handle for d in replies} == {"famous", "other"}
@@ -69,7 +82,7 @@ def test_poll_lists_reflects_membership_live(session, fake_formatter):
             "u8": [{"id": "303", "text": "q", "author_id": "u8"}],
         },
     )
-    assert monitor.poll_lists(session, fx, fake_formatter) == (1, 1)  # 当初メンバーは1人(返信+引用)
+    assert monitor.poll_lists(session, fx, fake_formatter) == (1, 0)  # 当初メンバーは1人(1案・既定reply)
     # リスト側にメンバーを追加 → 次の巡回で取り直すため新メンバーも自動で対象になる
     fx._list_members["L1"].append({"id": "u8", "username": "other"})
     monitor.poll_lists(session, fx, fake_formatter)
@@ -98,8 +111,8 @@ def test_run_once_summary(session, fake_formatter):
         timelines={"u9": [{"id": "202", "text": "t", "author_id": "u9"}]},
     )
     res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
-    # メンション1(返信のみ) + 対象アカウント1(返信+引用) = 返信2・引用1
-    assert res == {"reply_suggestions": 2, "quote_suggestions": 1}
+    # メンション1(返信のみ) + 対象アカウント1(AI判断・既定reply) = 返信2・引用0
+    assert res == {"reply_suggestions": 2, "quote_suggestions": 0}
 
 
 def test_keyword_source_off_by_default_then_on(session, fake_formatter):
@@ -109,11 +122,11 @@ def test_keyword_source_off_by_default_then_on(session, fake_formatter):
     # 既定では keyword_search_enabled=False → 生成ゼロ
     res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
     assert res["reply_suggestions"] == 0
-    # オンにすると検索ソースが動く(返信案＋引用案を生成)
+    # オンにすると検索ソースが動く(AI判断で1案・既定reply)
     monitor.set_monitor_settings(session, keyword_search_enabled=True)
     res2 = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
     assert res2["reply_suggestions"] == 1
-    assert res2["quote_suggestions"] == 1
+    assert res2["quote_suggestions"] == 0
 
 
 def test_following_source_gated(session, fake_formatter):
@@ -220,6 +233,6 @@ def test_drops_reposts(session, fake_formatter):
         {"id": "4", "text": "本人のオリジナル投稿", "author_id": "u9", "created_at": now},
     ]})
     r, q = monitor.poll_targets(session, fx, fake_formatter)
-    assert (r, q) == (1, 1)  # オリジナル(id=4)のみ × (返信+引用)
+    assert (r, q) == (1, 0)  # オリジナル(id=4)のみ × 1案(既定reply)
     ids = {d.target_tweet_id for d in session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()}
     assert ids == {"4"}

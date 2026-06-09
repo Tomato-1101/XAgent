@@ -14,6 +14,7 @@ import type {
   PromptTemplate,
   RecentPost,
   RecommendedTimes,
+  SchedulerStatus,
   SummaryResponse,
   Target,
   TemplateKind,
@@ -50,6 +51,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => req<{ status: string; version: string }>("/health"),
+  // 予約スケジューラ(予約投稿の常駐)の稼働状況。UIのバッジ表示に使う。
+  status: () => req<SchedulerStatus>("/status"),
   me: () => req<Me>("/me"),
 
   preview: (text: string, allow_long = false) =>
@@ -180,6 +183,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ override }),
     }),
+  // 絡みの下書きをリプライ⇄引用RTに作り直す(本文を再生成し型を切替)。Inboxの手動切替ボタン。
+  recast: (id: number, to: "reply" | "quote") =>
+    req<Draft>(`/drafts/${id}/recast`, { method: "POST", body: JSON.stringify({ to }) }),
 
   getStyle: () => req<{ guide_text: string; examples: string[] }>("/style"),
   putStyle: (guide_text: string) =>

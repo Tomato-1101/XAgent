@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -191,6 +192,48 @@ def test_create_quote_draft_stores_target_text(session, fake_formatter):
     d = service.create_quote_draft(session, fake_formatter, "777", "引用元の本文", "famous")
     assert d.kind == DraftKind.QUOTE
     assert d.target_text == "引用元の本文"
+
+
+def test_recast_reply_to_quote_regenerates_and_switches_kind(session, fake_formatter):
+    """AIが選んだ型を人が上書き: リプライ案を引用RT案に作り直す(本文再生成・元ポストは維持)。"""
+    d = service.create_reply_draft(session, fake_formatter, "555", "元ポスト本文", "someone")
+    assert d.kind == DraftKind.REPLY
+    out = service.recast_engage_draft(session, fake_formatter, d, DraftKind.QUOTE)
+    assert out.id == d.id  # 同じ下書きを作り直す(新規作成しない)
+    assert out.kind == DraftKind.QUOTE
+    assert out.target_tweet_id == "555"  # 元ポスト情報は引き継ぐ
+    assert out.target_text == "元ポスト本文"
+    assert json.loads(out.segments_json)[0].startswith("引用案:")  # 引用用に本文を生成し直している
+
+
+def test_recast_quote_to_reply(session, fake_formatter):
+    d = service.create_quote_draft(session, fake_formatter, "777", "元ポスト", "famous")
+    out = service.recast_engage_draft(session, fake_formatter, d, DraftKind.REPLY)
+    assert out.kind == DraftKind.REPLY
+    assert json.loads(out.segments_json)[0].startswith("返信案:")
+
+
+def test_recast_same_kind_is_noop(session, fake_formatter):
+    d = service.create_reply_draft(session, fake_formatter, "555", "元ポスト", "someone")
+    before = d.segments_json
+    out = service.recast_engage_draft(session, fake_formatter, d, DraftKind.REPLY)
+    assert out.kind == DraftKind.REPLY
+    assert out.segments_json == before  # 同じ型なら作り直さない
+
+
+def test_recast_rejects_non_draft_status(session, fake_formatter):
+    """承認済み等(DRAFT以外)は型を切り替えられない(誤って投稿直前の案を作り直さない)。"""
+    d = service.create_reply_draft(session, fake_formatter, "555", "元ポスト", "someone")
+    service.approve_draft(session, d)
+    with pytest.raises(PolicyViolation):
+        service.recast_engage_draft(session, fake_formatter, d, DraftKind.QUOTE)
+
+
+def test_recast_rejects_post_kind(session, fake_formatter):
+    """通常投稿(POST)はリプ/引用の対象外なので作り直せない。"""
+    d = service.create_post_draft(session, fake_formatter, "ただのメモ")
+    with pytest.raises(PolicyViolation):
+        service.recast_engage_draft(session, fake_formatter, d, DraftKind.QUOTE)
 
 
 def test_quote_command_stores_target_text(session, fake_formatter):

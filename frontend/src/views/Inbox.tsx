@@ -45,6 +45,7 @@ export default function Inbox({ me }: { me: Me | null }) {
   const [quoteUrl, setQuoteUrl] = useState(""); // 手動で引用案を作る対象ツイートURL
   const [quoting, setQuoting] = useState(false);
   const [pending, setPending] = useState<Draft | null>(null);
+  const [recastingId, setRecastingId] = useState<number | null>(null); // 型切替中の案id
   const toast = useToast();
   const { gate, element: blackoutGate } = useBlackoutGate();
 
@@ -98,6 +99,25 @@ export default function Inbox({ me }: { me: Me | null }) {
       reload();
     } catch (e) {
       setError(String(e));
+    }
+  }
+
+  // AIが選んだ型を人が上書きする。リプライ⇄引用RTで本文を作り直し、もう片方のセクションへ移す。
+  async function recast(d: Draft, to: "reply" | "quote") {
+    setRecastingId(d.id);
+    setError(null);
+    try {
+      await api.recast(d.id, to);
+      toast({
+        tone: "success",
+        message: to === "quote" ? "引用RT案に切り替えました。" : "リプライ案に切り替えました。",
+      });
+      reload();
+    } catch (e) {
+      setError(String(e));
+      toast({ tone: "error", message: `切替に失敗しました: ${String(e)}` });
+    } finally {
+      setRecastingId(null);
     }
   }
 
@@ -173,6 +193,14 @@ export default function Inbox({ me }: { me: Me | null }) {
               <Button size="sm" variant="danger" onClick={() => copyAndOpen(d)}>
                 コピーして元ポストを開く
               </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={recastingId === d.id}
+                onClick={() => recast(d, "quote")}
+              >
+                {recastingId === d.id ? <Spinner /> : "引用RTで送る"}
+              </Button>
               <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
                 却下
               </Button>
@@ -196,6 +224,14 @@ export default function Inbox({ me }: { me: Me | null }) {
                 }
               >
                 承認のみ
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={recastingId === d.id}
+                onClick={() => recast(d, "reply")}
+              >
+                {recastingId === d.id ? <Spinner /> : "手動で返信に切替"}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
                 却下
@@ -226,7 +262,7 @@ export default function Inbox({ me }: { me: Me | null }) {
         <div>
           <h1 className="text-xl font-semibold">Inbox</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            絡み先への返信案（手動送信）と引用案（承認で送信）を分けて表示します。
+            投稿ごとにAIが返信／引用RTの良い方を1案だけ作ります。型を変えたいときは各案のボタン（「引用RTで送る」「手動で返信に切替」）で切り替えられます。
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">

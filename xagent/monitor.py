@@ -115,24 +115,26 @@ def _emit_engage_drafts(
     formatter: Formatter,
     t: dict,
     handle: str | None,
-    budget_left: int | None,
 ) -> tuple[int, int]:
-    """絡み対象の1投稿に「返信案」と「引用案(引用RT)」を両方下書きする。(返信数, 引用数)を返す。
+    """絡み対象の1投稿に対し、AIが「リプライ」と「引用RT」のどちらが効果的かを判断し、
+    良い方の案を1件だけ下書きする。(返信数, 引用数) を返す(必ず片方は0)。
 
-    返信はXの制限でアプリから送信できず手動(Inboxでコピー&元ポストを開く)、引用RTは送信可。
-    人間がどちらで絡むかを選べるよう両方出す。バジェット残りが1件しか無いときは返信のみ作る。
+    以前は1投稿につき返信案・引用案を両方作っていたが、AI判断で1案に絞ることで生成コストと
+    下書き件数を半減する。型を変えたいときは Inbox の手動切替([引用RTで送る]/[手動で返信に
+    切替])で人間が後から作り直せる(service.recast_engage_draft)。
     """
     text = t.get("text", "")
     ca = t.get("created_at")
+    kind = formatter.decide_engage_type(text, handle or "")
+    if kind == "quote":
+        create_quote_draft(
+            session, formatter, t["id"], text, target_handle=handle, target_created_at=ca
+        )
+        return 0, 1
     create_reply_draft(
         session, formatter, t["id"], text, target_handle=handle, target_created_at=ca
     )
-    if budget_left is not None and budget_left <= 1:
-        return 1, 0
-    create_quote_draft(
-        session, formatter, t["id"], text, target_handle=handle, target_created_at=ca
-    )
-    return 1, 1
+    return 1, 0
 
 
 def poll_mentions(
@@ -166,9 +168,9 @@ def poll_mentions(
 def poll_targets(
     session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
 ) -> tuple[int, int]:
-    """手動追加(MANUAL・user_id付き)の新規投稿→返信案＋引用案。limit は全対象で共有。
+    """手動追加(MANUAL・user_id付き)の新規投稿→AI判断で返信案か引用案を1件。limit は全対象で共有。
 
-    (返信数, 引用数) を返す。1投稿につき返信と引用RTの両方を下書きする(_emit_engage_drafts)。
+    (返信数, 引用数) を返す。1投稿につきAIが良い方を選んで1件だけ下書きする(_emit_engage_drafts)。
     """
     targets = session.exec(
         select(EngageTarget).where(
@@ -197,8 +199,7 @@ def poll_targets(
         for t in tweets:
             if limit is not None and created >= limit:
                 break
-            bl = None if limit is None else limit - created
-            r, q = _emit_engage_drafts(session, formatter, t, target.handle, bl)
+            r, q = _emit_engage_drafts(session, formatter, t, target.handle)
             created += r + q
             replies += r
             quotes += q
@@ -214,7 +215,7 @@ def poll_targets(
 def poll_lists(
     session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
 ) -> tuple[int, int]:
-    """Xリスト連携(kind=LIST)→リストの現メンバーを毎回展開し各人の新規投稿→返信案＋引用案。
+    """Xリスト連携(kind=LIST)→リストの現メンバーを毎回展開し各人の新規投稿→AI判断で1件。
 
     メンバーは巡回ごとに get_list_members で取り直すため、Xリスト側の増減が自動で反映される
     (=リスト更新が絡む相手に連携)。limit は全対象で共有。(返信数, 引用数) を返す。
@@ -251,8 +252,7 @@ def poll_lists(
             for t in tweets:
                 if limit is not None and created >= limit:
                     break
-                bl = None if limit is None else limit - created
-                r, q = _emit_engage_drafts(session, formatter, t, m.get("username"), bl)
+                r, q = _emit_engage_drafts(session, formatter, t, m.get("username"))
                 created += r + q
                 replies += r
                 quotes += q
@@ -268,9 +268,9 @@ def poll_lists(
 def poll_genre(
     session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
 ) -> tuple[int, int]:
-    """ジャンル/キーワード探索(GENRE対象)→該当投稿に返信案＋引用案。limit は全対象で共有。
+    """ジャンル/キーワード探索(GENRE対象)→該当投稿にAI判断で返信案か引用案を1件。limit は全対象で共有。
 
-    (返信数, 引用数) を返す。1投稿につき返信と引用RTの両方を下書きする(_emit_engage_drafts)。
+    (返信数, 引用数) を返す。1投稿につきAIが良い方を選んで1件だけ下書きする(_emit_engage_drafts)。
     """
     targets = session.exec(
         select(EngageTarget).where(
@@ -297,8 +297,7 @@ def poll_genre(
         for t in tweets:
             if limit is not None and created >= limit:
                 break
-            bl = None if limit is None else limit - created
-            r, q = _emit_engage_drafts(session, formatter, t, t.get("author_id"), bl)
+            r, q = _emit_engage_drafts(session, formatter, t, t.get("author_id"))
             created += r + q
             replies += r
             quotes += q
@@ -315,9 +314,9 @@ def poll_following(
     session: Session, x_client: XClient, formatter: Formatter, me_user_id: str,
     limit: int | None = None,
 ) -> tuple[int, int]:
-    """フォロー中アカウントの新規投稿→返信案＋引用案。limit は全対象で共有。
+    """フォロー中アカウントの新規投稿→AI判断で返信案か引用案を1件。limit は全対象で共有。
 
-    (返信数, 引用数) を返す。1投稿につき返信と引用RTの両方を下書きする(_emit_engage_drafts)。
+    (返信数, 引用数) を返す。1投稿につきAIが良い方を選んで1件だけ下書きする(_emit_engage_drafts)。
     """
     following = x_client.get_following(me_user_id, max_total=FOLLOWING_MAX_ACCOUNTS)
     created = 0
@@ -341,8 +340,7 @@ def poll_following(
         for t in tweets:
             if limit is not None and created >= limit:
                 break
-            bl = None if limit is None else limit - created
-            r, q = _emit_engage_drafts(session, formatter, t, user.get("username"), bl)
+            r, q = _emit_engage_drafts(session, formatter, t, user.get("username"))
             created += r + q
             replies += r
             quotes += q
@@ -388,6 +386,6 @@ def run_once(
         _acc(poll_genre(session, x_client, formatter, limit=budget))
     if cfg.following_enabled and budget > 0:
         _acc(poll_following(session, x_client, formatter, me_user_id, limit=budget))
-    # 絡み対象(targets/lists/genre/following)は返信案＋引用案の両方を生成。メンションは
-    # 自分宛のため返信のみ。総生成数はバジェット(max_drafts_per_run)で全ソース共有上限。
+    # 絡み対象(targets/lists/genre/following)は投稿ごとにAIが返信/引用RTの良い方を1件生成。
+    # メンションは自分宛のため返信のみ。総生成数はバジェット(max_drafts_per_run)で全ソース共有上限。
     return {"reply_suggestions": replies, "quote_suggestions": quotes}

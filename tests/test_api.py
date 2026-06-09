@@ -43,6 +43,40 @@ def test_me_endpoint(client):
     assert client.get("/me").json()["username"] == "tester"
 
 
+def test_status_endpoint(client):
+    """/status は予約スケジューラの稼働状況を返す。TestClientはlifespanを起動しない=未稼働。"""
+    body = client.get("/status").json()
+    for k in [
+        "scheduler_enabled", "scheduler_running", "healthy",
+        "queue_interval_seconds", "posting_enabled", "auto_monitor_enabled",
+    ]:
+        assert k in body
+    assert body["scheduler_running"] is False  # lifespan未起動なのでスケジューラは無し
+    assert body["healthy"] is False
+    assert body["posting_enabled"] is True
+    assert body["auto_monitor_enabled"] is False  # 既定OFF
+
+
+def test_recast_endpoint_switches_kind(client):
+    """Inboxの型切替: 返信案を引用RT案へ作り直す(kindが切り替わる)。"""
+    did = client.post(
+        "/compose/command", json={"action": "reply", "text": "返信文", "target_tweet_id": "555"}
+    ).json()["id"]
+    assert client.get(f"/drafts/{did}").json()["kind"] == "reply"
+    r = client.post(f"/drafts/{did}/recast", json={"to": "quote"})
+    assert r.status_code == 200
+    assert r.json()["kind"] == "quote"
+
+
+def test_recast_endpoint_409_on_approved(client):
+    """承認済み(DRAFT以外)は型を切り替えられず409。"""
+    did = client.post(
+        "/compose/command", json={"action": "reply", "text": "返信文", "target_tweet_id": "555"}
+    ).json()["id"]
+    client.post(f"/drafts/{did}/approve")
+    assert client.post(f"/drafts/{did}/recast", json={"to": "quote"}).status_code == 409
+
+
 def test_preview_endpoint(client):
     r = client.post("/compose/preview", json={"text": "あ" * 200})
     d = r.json()

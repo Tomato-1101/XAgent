@@ -237,3 +237,27 @@ class Formatter:
         user = f"引用する相手(@{target_handle})の投稿:\n{target_text}"
         text = self._complete(system, user).strip()
         return FormatResult([text], exceeds_fold(text), weighted_length(text))
+
+    # --- 絡み方の判断(リプライ or 引用RT) ---
+    def decide_engage_type(self, target_text: str, target_handle: str = "") -> str:
+        """相手の投稿に「リプライ」と「引用RT」どちらで絡むのが良いかを判断する。
+
+        'reply' か 'quote' を返す。同じ投稿に2案作らず、良い方だけを生成するための判断。
+        - reply: 相手のスレッドに短い共感で割り込んで露出を取る方が自然(会話・あるある・反応)。
+          会話的な投稿、相手に直接話しかける方が映える内容、伸び始めのバズへの相乗り。主力。
+        - quote: 自分のフォロワーへ拡散する価値がある投稿で、自分の視点/一次情報を一段添えたい時
+          (ニュース・知見・主張の紹介＋自分の意見)。ブロードキャストしたい時。
+        判断に迷う/情報不足なら 'reply'(露出重視のデフォルト)。
+        """
+        system = (
+            "あなたは日本語Xアカウントの運用アシスタント。相手の投稿に絡むとき、"
+            "『リプライ(reply)』と『引用RT(quote)』のどちらが効果的かを判断する。\n"
+            "- reply: 相手のスレッドに短い共感・反応で割り込んで露出を取る方が自然な投稿"
+            "(会話的・あるある・伸び始めのバズへの相乗り)。これが主力・デフォルト。\n"
+            "- quote: 自分のフォロワーに広める価値があり、自分の視点や一次情報を一段添えたい投稿"
+            "(ニュース/知見/主張の紹介＋自分の意見)。\n"
+            "迷ったら reply。出力は 'reply' か 'quote' の一語だけ。"
+        )
+        user = f"相手(@{target_handle})の投稿:\n{target_text}\n\nreply か quote の一語だけ返す。"
+        out = self._complete(system, user).strip().lower()
+        return "quote" if "quote" in out else "reply"
