@@ -61,7 +61,7 @@ export default function Inbox({ me }: { me: Me | null }) {
     setInfo(null);
     try {
       const r = await api.monitorRunOnce(runLimit > 0 ? runLimit : undefined);
-      setInfo(`返信案を ${r.reply_suggestions} 件生成しました（最大 ${runLimit} 件・絡み先へのリプライ含む）`);
+      setInfo(`返信案 ${r.reply_suggestions} 件・引用案 ${r.quote_suggestions} 件を生成しました（最大 ${runLimit} 件）`);
       reload();
     } catch (e) {
       setError(String(e));
@@ -205,7 +205,7 @@ export default function Inbox({ me }: { me: Me | null }) {
         <div>
           <h1 className="text-xl font-semibold">Inbox</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            メンションへの返信案・絡み案（承認すれば送信できます）。
+            絡み先への返信案（手動送信）と引用案（承認で送信）を分けて表示します。
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">

@@ -9,8 +9,8 @@ from tests.conftest import FakeXClient
 
 def test_poll_mentions_creates_reply_drafts(session, fake_formatter):
     fx = FakeXClient(mentions=[{"id": "101", "text": "メンション本文", "author_id": "u1"}])
-    n = monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me")
-    assert n == 1
+    r, q = monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me")
+    assert (r, q) == (1, 0)  # 自分宛メンションは返信のみ(引用RTしない)
     drafts = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()
     assert len(drafts) == 1
     assert drafts[0].target_tweet_id == "101"
@@ -19,16 +19,17 @@ def test_poll_mentions_creates_reply_drafts(session, fake_formatter):
     assert cur.last_seen_id == "101"
 
 
-def test_poll_targets_creates_reply_drafts(session, fake_formatter):
-    """対象アカウント(MANUAL)の新規投稿にはリプライ案を作る(絡みはリプに統一)。"""
+def test_poll_targets_creates_reply_and_quote_drafts(session, fake_formatter):
+    """対象アカウント(MANUAL)の新規投稿には返信案と引用案の両方を作る(人間がどちらで絡むか選ぶ)。"""
     session.add(EngageTarget(kind=TargetKind.MANUAL, handle="famous", user_id="u9", active=True))
     session.commit()
     fx = FakeXClient(timelines={"u9": [{"id": "202", "text": "有名人の新規投稿", "author_id": "u9"}]})
-    n = monitor.poll_targets(session, fx, fake_formatter)
-    assert n == 1
-    drafts = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()
-    assert len(drafts) == 1
-    assert drafts[0].target_tweet_id == "202"
+    r, q = monitor.poll_targets(session, fx, fake_formatter)
+    assert (r, q) == (1, 1)
+    replies = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()
+    quotes = session.exec(select(Draft).where(Draft.kind == DraftKind.QUOTE)).all()
+    assert [d.target_tweet_id for d in replies] == ["202"]
+    assert [d.target_tweet_id for d in quotes] == ["202"]
 
 
 def test_auto_run_flags_default_off_and_toggle(session):
@@ -39,8 +40,8 @@ def test_auto_run_flags_default_off_and_toggle(session):
     assert cfg.auto_monitor_enabled is True
 
 
-def test_poll_lists_expands_members_to_replies(session, fake_formatter):
-    """kind=LIST はリストの現メンバーへ展開し、各メンバーの新規投稿にリプライ案を作る。"""
+def test_poll_lists_expands_members_to_reply_and_quote(session, fake_formatter):
+    """kind=LIST はリストの現メンバーへ展開し、各メンバーの新規投稿に返信案＋引用案を作る。"""
     session.add(EngageTarget(kind=TargetKind.LIST, handle="絡み候補A", list_id="L1", active=True))
     session.commit()
     fx = FakeXClient(
@@ -50,11 +51,11 @@ def test_poll_lists_expands_members_to_replies(session, fake_formatter):
             "u8": [{"id": "303", "text": "メンバー2の投稿", "author_id": "u8"}],
         },
     )
-    n = monitor.poll_lists(session, fx, fake_formatter)
-    assert n == 2
-    drafts = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()
-    assert {d.target_tweet_id for d in drafts} == {"202", "303"}
-    assert {d.target_handle for d in drafts} == {"famous", "other"}
+    r, q = monitor.poll_lists(session, fx, fake_formatter)
+    assert (r, q) == (2, 2)  # 2メンバー × (返信+引用)
+    replies = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()
+    assert {d.target_tweet_id for d in replies} == {"202", "303"}
+    assert {d.target_handle for d in replies} == {"famous", "other"}
 
 
 def test_poll_lists_reflects_membership_live(session, fake_formatter):
@@ -68,7 +69,7 @@ def test_poll_lists_reflects_membership_live(session, fake_formatter):
             "u8": [{"id": "303", "text": "q", "author_id": "u8"}],
         },
     )
-    assert monitor.poll_lists(session, fx, fake_formatter) == 1  # 当初メンバーは1人(famous)
+    assert monitor.poll_lists(session, fx, fake_formatter) == (1, 1)  # 当初メンバーは1人(返信+引用)
     # リスト側にメンバーを追加 → 次の巡回で取り直すため新メンバーも自動で対象になる
     fx._list_members["L1"].append({"id": "u8", "username": "other"})
     monitor.poll_lists(session, fx, fake_formatter)
@@ -85,7 +86,7 @@ def test_poll_targets_ignores_list_kind(session, fake_formatter):
         list_members={"L1": [{"id": "u9", "username": "famous"}]},
         timelines={"u9": [{"id": "202", "text": "p", "author_id": "u9"}]},
     )
-    assert monitor.poll_targets(session, fx, fake_formatter) == 0
+    assert monitor.poll_targets(session, fx, fake_formatter) == (0, 0)
 
 
 def test_run_once_summary(session, fake_formatter):
@@ -96,8 +97,8 @@ def test_run_once_summary(session, fake_formatter):
         timelines={"u9": [{"id": "202", "text": "t", "author_id": "u9"}]},
     )
     res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
-    # メンション1 + 対象アカウント1 = 計2、すべて返信案に集約(quoteは常に0)
-    assert res == {"reply_suggestions": 2, "quote_suggestions": 0}
+    # メンション1(返信のみ) + 対象アカウント1(返信+引用) = 返信2・引用1
+    assert res == {"reply_suggestions": 2, "quote_suggestions": 1}
 
 
 def test_keyword_source_off_by_default_then_on(session, fake_formatter):
@@ -107,10 +108,11 @@ def test_keyword_source_off_by_default_then_on(session, fake_formatter):
     # 既定では keyword_search_enabled=False → 生成ゼロ
     res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
     assert res["reply_suggestions"] == 0
-    # オンにすると検索ソースが動く(リプライ案を生成)
+    # オンにすると検索ソースが動く(返信案＋引用案を生成)
     monitor.set_monitor_settings(session, keyword_search_enabled=True)
     res2 = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
     assert res2["reply_suggestions"] == 1
+    assert res2["quote_suggestions"] == 1
 
 
 def test_following_source_gated(session, fake_formatter):
@@ -191,8 +193,8 @@ def test_within_age_skips_old_posts(session, fake_formatter):
         {"id": "1", "text": "古い", "author_id": "u1", "created_at": now - timedelta(days=5)},
         {"id": "2", "text": "新しい", "author_id": "u1", "created_at": now - timedelta(hours=2)},
     ])
-    n = monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me")
-    assert n == 1
+    r, q = monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me")
+    assert (r, q) == (1, 0)
     d = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).one()
     assert d.target_tweet_id == "2"  # 新しい方だけ採用
 
@@ -200,7 +202,7 @@ def test_within_age_skips_old_posts(session, fake_formatter):
 def test_within_age_passes_when_created_at_missing(session, fake_formatter):
     """created_at が無いツイートは判定不能として通す(従来挙動・テスト互換)。"""
     fx = FakeXClient(mentions=[{"id": "9", "text": "日時なし", "author_id": "u1"}])
-    assert monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me") == 1
+    assert monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me") == (1, 0)
 
 
 def test_drops_simple_retweets(session, fake_formatter):
@@ -213,7 +215,7 @@ def test_drops_simple_retweets(session, fake_formatter):
         {"id": "2", "text": "これ良いね！ https://t.co/x", "author_id": "u9", "created_at": now},
         {"id": "3", "text": "本人のオリジナル投稿", "author_id": "u9", "created_at": now},
     ]})
-    n = monitor.poll_targets(session, fx, fake_formatter)
-    assert n == 2  # 単純RT(id=1)を除いた2件
+    r, q = monitor.poll_targets(session, fx, fake_formatter)
+    assert (r, q) == (2, 2)  # 単純RT(id=1)を除いた2件 × (返信+引用)
     ids = {d.target_tweet_id for d in session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()}
     assert ids == {"2", "3"}
