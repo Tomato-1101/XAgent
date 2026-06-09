@@ -2,6 +2,7 @@
 # 開発環境では `pip install -e ".[dev]"` を推奨。
 fastapi>=0.115
 uvicorn>=0.30
+watchfiles>=0.21
 pydantic>=2.7
 pydantic-settings>=2.3
 sqlmodel>=0.0.21
