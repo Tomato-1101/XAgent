@@ -96,6 +96,12 @@ class CommandRequest(BaseModel):
     auto_template: bool = False        # TrueでAIが最適な型を自動選択(「AIに任せる」)
 
 
+class QuoteFromUrlRequest(BaseModel):
+    """URLから引用案(引用RT)をAIに生成させるための入力(Inboxの手動ボタン)。"""
+
+    url: str  # x.com/.../status/<id> 形式のツイートURL
+
+
 class TemplateRead(BaseModel):
     id: int | None
     name: str

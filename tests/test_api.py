@@ -155,15 +155,16 @@ def test_compose_variations_endpoint(client):
 
 
 def test_monitor_settings_toggle(client):
-    # 既定値
+    # 既定値(mentions は手動返信方針のため既定OFF)
     s = client.get("/monitor/settings").json()
-    assert s["mentions_enabled"] is True
+    assert s["mentions_enabled"] is False
+    assert s["manual_targets_enabled"] is True
     assert s["following_enabled"] is False
     # フォロー監視をオンにする
     s2 = client.put("/monitor/settings", json={"following_enabled": True}).json()
     assert s2["following_enabled"] is True
-    # 他のトグルは維持
-    assert s2["mentions_enabled"] is True
+    # 他のトグルは維持(指定しなかった manual_targets は True のまま)
+    assert s2["manual_targets_enabled"] is True
 
 
 def test_api_token_auth(client, monkeypatch):
@@ -290,6 +291,33 @@ def test_command_reply_fetches_target_text(client):
     d = r.json()
     assert d["target_text"] == "相手の元ポスト本文"
     assert d["target_handle"] == "someone"
+
+
+def test_quote_from_url_ai_generates_quote(client):
+    """InboxのURL手動入力 → 相手投稿本文からAIが引用コメントを生成し引用案を作る。"""
+    from xagent.api.deps import get_x_client_optional
+
+    fx = FakeXClient(
+        tweets={"777": {"id": "777", "text": "引用元の本文", "author_handle": "famous"}}
+    )
+    app.dependency_overrides[get_x_client_optional] = lambda: fx
+    try:
+        r = client.post(
+            "/compose/quote-from-url", json={"url": "https://x.com/famous/status/777"}
+        )
+        assert r.status_code == 200
+        d = r.json()
+        assert d["kind"] == "quote"
+        assert d["target_tweet_id"] == "777"
+        assert d["target_text"] == "引用元の本文"
+        assert d["target_handle"] == "famous"
+    finally:
+        app.dependency_overrides.pop(get_x_client_optional, None)
+
+
+def test_quote_from_url_rejects_non_url(client):
+    r = client.post("/compose/quote-from-url", json={"url": "ただの文字列"})
+    assert r.status_code == 400
 
 
 def test_command_raw_post_skips_formatting(client):

@@ -24,7 +24,7 @@ def get_monitor_settings(session: Session) -> MonitorSettings:
     """監視トグル設定(単一行)。無ければ既定で作成する。"""
     row = session.exec(select(MonitorSettings)).first()
     if row is None:
-        row = MonitorSettings()  # 既定: mentions/manual=ON, keyword/following=OFF
+        row = MonitorSettings()  # 既定: manual=ON, mentions/keyword/following=OFF
         session.add(row)
         session.commit()
         session.refresh(row)
@@ -97,13 +97,17 @@ def _within_age(
     return out
 
 
-def _drop_retweets(tweets: list[dict]) -> list[dict]:
-    """単純リポスト(コメント無しRT)を除外する。本人のポストと引用RT(本人のコメント有り)だけ残す。
+def _drop_reposts(tweets: list[dict]) -> list[dict]:
+    """リポスト(単純RT・引用RT)を除外し、対象アカウントの本人オリジナル投稿だけ残す。
 
-    単純RTは本文が 'RT @<user>: ...' で始まる(公式API・twitterapi.io 共通の慣習)。引用RTは
-    本人のコメントが本文に入るため 'RT @' では始まらず残る。リポストには反応しない方針。
+    判定は2系統: (1)正規化辞書の is_repost(retweeted_tweet/quoted_tweet または公式APIの
+    referenced_tweets[type=retweeted/quoted]由来)、(2)後方互換の本文 'RT @<user>:' 始まり。
+    引用RTも対象外(本人のオリジナルではないため絡み案を作らない方針)。
     """
-    return [t for t in tweets if not str(t.get("text", "")).startswith("RT @")]
+    return [
+        t for t in tweets
+        if not t.get("is_repost") and not str(t.get("text", "")).startswith("RT @")
+    ]
 
 
 def _emit_engage_drafts(
@@ -141,7 +145,7 @@ def poll_mentions(
     """
     cur = _get_cursor(session, "mentions")
     tweets = _cap_oldest(
-        _within_age(_drop_retweets(x_client.get_mentions(me_user_id, since_id=cur.last_seen_id))),
+        _within_age(_drop_reposts(x_client.get_mentions(me_user_id, since_id=cur.last_seen_id))),
         limit,
     )
     created = 0
@@ -183,7 +187,7 @@ def poll_targets(
         cur = _get_cursor(session, f"target:{target.user_id}")
         tweets = _cap_oldest(
             _within_age(
-                _drop_retweets(
+                _drop_reposts(
                     x_client.get_user_timeline(target.user_id, since_id=cur.last_seen_id)
                 )
             ),
@@ -239,7 +243,7 @@ def poll_lists(
             cur = _get_cursor(session, f"target:{uid}")
             tweets = _cap_oldest(
                 _within_age(
-                    _drop_retweets(x_client.get_user_timeline(uid, since_id=cur.last_seen_id))
+                    _drop_reposts(x_client.get_user_timeline(uid, since_id=cur.last_seen_id))
                 ),
                 remaining,
             )
@@ -285,7 +289,7 @@ def poll_genre(
         cur = _get_cursor(session, f"genre:{target.keyword}")
         tweets = _cap_oldest(
             _within_age(
-                _drop_retweets(x_client.search_recent(target.keyword, since_id=cur.last_seen_id))
+                _drop_reposts(x_client.search_recent(target.keyword, since_id=cur.last_seen_id))
             ),
             remaining,
         )
@@ -329,7 +333,7 @@ def poll_following(
         cur = _get_cursor(session, f"follow:{uid}")
         tweets = _cap_oldest(
             _within_age(
-                _drop_retweets(x_client.get_user_timeline(uid, since_id=cur.last_seen_id))
+                _drop_reposts(x_client.get_user_timeline(uid, since_id=cur.last_seen_id))
             ),
             remaining,
         )

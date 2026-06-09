@@ -209,7 +209,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 
 | フィールド | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `mentions_enabled` | `bool` | `True` | メンション監視 |
+| `mentions_enabled` | `bool` | `False` | メンション監視(自分のポストへの返信)。**既定OFF=手動で返す方針**。トグルは残すのでONにすれば `poll_mentions` で返信案を生成できる |
 | `manual_targets_enabled` | `bool` | `True` | 手動リスト対象の監視(MANUAL+LIST の両方を支配) |
 | `keyword_search_enabled` | `bool` | `False` | キーワード探索(コスト高ゆえ既定オフ) |
 | `following_enabled` | `bool` | `False` | フォロー中の監視(コスト高ゆえ既定オフ) |
@@ -370,7 +370,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 ### 監視・絡み(§10 に動作詳細)
 
-- **監視ソース**: メンション(reply案)/手動MANUAL対象(quote案)/Xリスト(quote案)/ジャンルkeyword(quote案、既定オフ)/フォロー中(quote案、既定オフ)。
+- **監視ソース**: メンション(reply案、**既定オフ=手動返信方針**)/手動MANUAL対象(reply+quote案)/Xリスト(reply+quote案)/ジャンルkeyword(reply+quote案、既定オフ)/フォロー中(reply+quote案、既定オフ)。絡み対象は**本人オリジナル投稿のみ**(RT・引用RT・3日超は除外)。
 - **絡み対象(EngageTarget)**: MANUAL(user_id 直接)/LIST(list_id を毎回メンバー展開)/GENRE(keyword 検索)/FOLLOWING(Enum はあるが poll は EngageTarget を読まず自分のフォローを直接巡回)。
 - **返信/引用生成(generate_reply / generate_quote)**: 相手投稿から AI が本文生成。返信は `_REPLY_LENGTH_BANDS` から `random.choice` で長さ帯を選び、毎回同じ長さに寄るのを防ぐ。常に1セグメント(分割しない)、140字厳守。
 
@@ -414,6 +414,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 | POST | `/compose/variations` | 言い回し違いN案。`raw=true` なら1件のみ | 使用 | 400 |
 | POST | `/compose/interpret` | 自由文の指令解析(下書きは作らないがコスト計上) | 使用 | — |
 | POST | `/compose/command` | 確認済み指令から下書き作成(quote/reply/post)。quote/reply は `target_tweet_id` 必須 | 使用 | 400 |
+| POST | `/compose/quote-from-url` | ツイートURLから引用案(引用RT)をAI生成(`create_quote_draft`)。Inboxの手動ボタン | 使用 | 400 |
 
 ### drafts(`/drafts`)
 
@@ -538,7 +539,7 @@ Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯�
 | 画面 | 用途 | 主操作 |
 |---|---|---|
 | **Compose** | 思いつきを整形して下書き化 | ライブプレビュー(400msデバウンス)、メディア添付(画像4/動画1/混在不可)、emulate選択、案の数(1〜4)、型選択(既定`auto`)、長文許可/raw。指令マーカー(URL or「そのまま」等)があれば「指令を解析」→ confirm → command |
-| **Inbox** | メンション返信案・絡み案の承認/編集/送信 | `kind !== "post"` のみ表示し、性質が違うので**返信案(sky)と引用案/引用RT(violet)に分けて表示**(`kind==="reply"`/`"quote"`)。「監視を1回実行」(横の件数入力でその回の生成上限を指定・既定10、`monitorRunOnce(limit)`)。**返信案はAPI送信不可のため「コピーして元ポストを開く」(返信文をクリップボードにコピー＋相手ポストを別タブで開く=ポップアップブロック回避でwindow.open先行)＋「却下」のみ**(注記を上部に表示)。承認導線は無く DRAFT のまま手動送信。引用案は「承認して送信」(BlackoutGate経由、`approve→postNow` 順)/「承認のみ」/「却下」 |
+| **Inbox** | メンション返信案・絡み案の承認/編集/送信 | `kind !== "post"` のみ表示し、性質が違うので**返信案(sky)と引用案/引用RT(violet)に分けて表示**(`kind==="reply"`/`"quote"`)。「監視を1回実行」(横の件数入力でその回の生成上限を指定・既定10、`monitorRunOnce(limit)`)。**「URLから引用案を作る」手動ボタン**(URL入力＋ボタン→`POST /compose/quote-from-url`→`service.create_quote_draft` で相手投稿からAIが引用コメントを生成し引用案セクションに追加。自分のコメントを添える引用は Compose の指令フロー)。**返信案はAPI送信不可のため「コピーして元ポストを開く」(返信文をクリップボードにコピー＋相手ポストを別タブで開く=ポップアップブロック回避でwindow.open先行)＋「却下」のみ**(注記を上部に表示)。承認導線は無く DRAFT のまま手動送信。引用案は「承認して送信」(BlackoutGate経由、`approve→postNow` 順)/「承認のみ」/「却下」 |
 | **Queue** | 自分投稿の下書き・予約・投稿・取消をタブ管理 | タブ: 下書き(post限定)/承認済み/予約/投稿済み/取消。**全タブで返信(reply)は除外**(API投稿不可のためInboxで手動送信)。queued/approved 表示時に `reconcileSchedules` を1回実行(失効復旧)。最適時間予約/時間指定予約(SchedulePicker)/今すぐ投稿/取消。BlackoutGate は「今すぐ投稿」「時間指定予約」のみ(最適予約・取消は通さない) |
 | **Posts** | 直近1週間の自分投稿を通常リポストで再拡散 | recentPosts/refreshPosts、リポスト(now/time)。Inbox/Queue と並んで `useBlackoutGate` を直接使う画面(投稿・予約を伴う3画面)。Compose は下書き作成専用のため BlackoutGate を使わない |
 | **Targets** | 絡む対象の管理 | リストを丸ごと対象化(推奨、`addTargetList`)、個別ハンドル追加、削除。kind=list は「リスト連携」バッジ、個別は user_id 解決済み/未解決バッジ |
@@ -615,7 +616,7 @@ CLI とほぼ対応する。差分・専用ツール:
 
 ### 受信監視・絡み案生成(`monitor.run_once`)
 
-`run_once(session, x_client, formatter, me_user_id, max_drafts=None) -> {"reply_suggestions": replies, "quote_suggestions": quotes}` が1監視サイクル。**絡み対象(手動MANUAL/リストLIST/ジャンルGENRE/フォロー)の新規投稿には、1投稿につき返信案(kind=reply)と引用案(kind=quote/引用RT)の両方を生成する**(`_emit_engage_drafts`。人間がどちらで絡むか選べるように。返信はAPI送信不可で手動・引用RTは送信可)。**自分宛メンションは返信案のみ**(自分宛は引用RTしないので `quote_suggestions` には乗らない)。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。各ソースは取得後、**投稿日時が3日以内(`TARGET_MAX_AGE_DAYS=3`)のものだけに絞る(`_within_age`)**＝古い投稿への無意味なリプ案・初回大量取得による乱造を防ぐ(`created_at` が取れないものは判定不能として通す)。さらに**単純リポスト(本文が `RT @` で始まるコメント無しRT)は除外(`_drop_retweets`)**し、本人のポストと引用RT(本人コメント有り)だけに反応する。生成数バジェット(`max_drafts_per_run`)は全ソース・返信/引用を合算した共有上限(残り1件のときは返信のみ作る)。
+`run_once(session, x_client, formatter, me_user_id, max_drafts=None) -> {"reply_suggestions": replies, "quote_suggestions": quotes}` が1監視サイクル。**絡み対象(手動MANUAL/リストLIST/ジャンルGENRE/フォロー)の新規投稿には、1投稿につき返信案(kind=reply)と引用案(kind=quote/引用RT)の両方を生成する**(`_emit_engage_drafts`。人間がどちらで絡むか選べるように。返信はAPI送信不可で手動・引用RTは送信可)。**自分宛メンションは返信案のみ**(自分宛は引用RTしないので `quote_suggestions` には乗らない)。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。各ソースは取得後、**投稿日時が3日以内(`TARGET_MAX_AGE_DAYS=3`)のものだけに絞る(`_within_age`)**＝古い投稿への無意味なリプ案・初回大量取得による乱造を防ぐ(`created_at` が取れないものは判定不能として通す)。さらに**リポスト(単純RT・引用RT)は除外(`_drop_reposts`)**し、**対象アカウントの本人オリジナル投稿だけ**に反応する。判定は正規化辞書の `is_repost`(twitterapi.io は `retweeted_tweet`/`quoted_tweet` の有無、公式API は `referenced_tweets` の type=retweeted/quoted)＋後方互換の本文 `RT @` 始まり。**自分宛メンション(自分のポストへの返信)は既定OFF**(`mentions_enabled=False`、手動で返す方針)。これらの対象ルールは memory `xagent-monitor-targeting-rules` に恒久記録。生成数バジェット(`max_drafts_per_run`)は全ソース・返信/引用を合算した共有上限(残り1件のときは返信のみ作る)。
 
 `budget`(手動1回実行で `max_drafts` を渡せばその回限りの上限、未指定は `cfg.max_drafts_per_run`)を**全ソース横断の総生成数バジェット**として共有。各ソースは下表の順で、`budget > 0` かつ対応トグルが ON のときだけ呼ばれ、生成数を `budget` から減算する(先着順・優先度固定)。
 

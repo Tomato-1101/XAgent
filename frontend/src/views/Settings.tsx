@@ -5,7 +5,7 @@ import { useToast } from "../components/Toast";
 import type { BlackoutSettings, MonitorSettings } from "../types";
 
 const TOGGLES: { key: keyof MonitorSettings; label: string; hint: string }[] = [
-  { key: "mentions_enabled", label: "メンション監視", hint: "自分宛の返信案を生成" },
+  { key: "mentions_enabled", label: "メンション監視", hint: "自分宛の返信案を生成（既定オフ・手動返信推奨）" },
   { key: "manual_targets_enabled", label: "手動リスト監視", hint: "Targetsに追加した相手の新規投稿を絡み案に" },
   { key: "keyword_search_enabled", label: "キーワード/ジャンル検索", hint: "ジャンル対象の検索から絡み案（コスト増）" },
   { key: "following_enabled", label: "フォロー中の監視", hint: "フォロー中の新規投稿を絡み案に（コスト高・既定オフ）" },

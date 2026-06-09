@@ -42,6 +42,8 @@ export default function Inbox({ me }: { me: Me | null }) {
   const [sending, setSending] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
   const [runLimit, setRunLimit] = useState(10); // 1回実行で作る上限(乱造防止・既定10)
+  const [quoteUrl, setQuoteUrl] = useState(""); // 手動で引用案を作る対象ツイートURL
+  const [quoting, setQuoting] = useState(false);
   const [pending, setPending] = useState<Draft | null>(null);
   const toast = useToast();
   const { gate, element: blackoutGate } = useBlackoutGate();
@@ -67,6 +69,25 @@ export default function Inbox({ me }: { me: Me | null }) {
       setError(String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  // URLから引用案(引用RT)をAIに生成させる。監視の自動生成と同じく相手投稿からコメントをAI生成。
+  async function makeQuoteFromUrl() {
+    const url = quoteUrl.trim();
+    if (!url) return;
+    setQuoting(true);
+    setError(null);
+    setInfo(null);
+    try {
+      await api.quoteFromUrl(url);
+      setQuoteUrl("");
+      setInfo("引用案を生成しました。下の「引用案」に表示されます。");
+      reload();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setQuoting(false);
     }
   }
 
@@ -225,6 +246,29 @@ export default function Inbox({ me }: { me: Me | null }) {
             {busy ? <Spinner /> : "監視を1回実行"}
           </Button>
         </div>
+      </div>
+
+      <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-2">
+        <span className="shrink-0 text-xs text-zinc-500">URLから引用案を作る</span>
+        <Input
+          type="text"
+          placeholder="https://x.com/.../status/..."
+          className="flex-1"
+          value={quoteUrl}
+          disabled={quoting}
+          onChange={(e) => setQuoteUrl(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") makeQuoteFromUrl();
+          }}
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={makeQuoteFromUrl}
+          disabled={quoting || !quoteUrl.trim()}
+        >
+          {quoting ? <Spinner /> : "引用案を作る"}
+        </Button>
       </div>
 
       <AgentHint title="絡みをClaude Codeに任せる" phrases={AGENT_PHRASES} />

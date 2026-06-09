@@ -36,6 +36,10 @@ def _normalize_tweets(resp: Any) -> list[dict]:
     data = getattr(resp, "data", None) or []
     out = []
     for t in data:
+        # referenced_tweets(tweet_fieldsで要求)に retweeted/quoted があればリポスト。
+        # 本人のオリジナルではないので絡み対象から外す(twitterapi.io 側の is_repost と対応)。
+        refs = getattr(t, "referenced_tweets", None) or []
+        is_repost = any(getattr(r, "type", None) in ("retweeted", "quoted") for r in refs)
         out.append(
             {
                 "id": str(getattr(t, "id", "")),
@@ -44,6 +48,7 @@ def _normalize_tweets(resp: Any) -> list[dict]:
                     str(t.author_id) if getattr(t, "author_id", None) else None
                 ),
                 "created_at": getattr(t, "created_at", None),  # 元投稿の投稿時刻(tweet_fieldsで要求)
+                "is_repost": is_repost,
             }
         )
     return out
@@ -308,7 +313,8 @@ class XClient:
 
     def _official_get_mentions(self, user_id: str, since_id: str | None = None) -> list[dict]:
         resp = self._client.get_users_mentions(
-            id=user_id, since_id=since_id, tweet_fields=["author_id", "created_at"]
+            id=user_id, since_id=since_id,
+            tweet_fields=["author_id", "created_at", "referenced_tweets"],
         )
         return _normalize_tweets(resp)
 
@@ -321,7 +327,8 @@ class XClient:
 
     def _official_get_user_timeline(self, user_id: str, since_id: str | None = None) -> list[dict]:
         resp = self._client.get_users_tweets(
-            id=user_id, since_id=since_id, tweet_fields=["author_id", "created_at"]
+            id=user_id, since_id=since_id,
+            tweet_fields=["author_id", "created_at", "referenced_tweets"],
         )
         return _normalize_tweets(resp)
 
@@ -334,7 +341,8 @@ class XClient:
 
     def _official_search_recent(self, query: str, since_id: str | None = None) -> list[dict]:
         resp = self._client.search_recent_tweets(
-            query=query, since_id=since_id, tweet_fields=["author_id", "created_at"]
+            query=query, since_id=since_id,
+            tweet_fields=["author_id", "created_at", "referenced_tweets"],
         )
         return _normalize_tweets(resp)
 

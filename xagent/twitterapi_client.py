@@ -80,12 +80,16 @@ class TwitterApiIoClient:
     @staticmethod
     def _norm(t: dict) -> dict:
         author = t.get("author") if isinstance(t.get("author"), dict) else {}
+        # リポスト判定: 単純RTは retweeted_tweet、引用RTは quoted_tweet に元ツイートのdictが入る
+        # (実レスポンスで確認済み)。どちらも本人のオリジナルではないので絡み対象から外す。
+        is_repost = bool(t.get("retweeted_tweet")) or bool(t.get("quoted_tweet"))
         return {
             "id": str(t.get("id", "")),
             "text": t.get("text", ""),
             "author_id": str(author.get("id")) if author.get("id") else None,
             "author_handle": author.get("userName"),
             "created_at": _parse_created_at(t.get("createdAt")),  # 元投稿の投稿時刻(表示・鮮度判断用)
+            "is_repost": is_repost,
         }
 
     @staticmethod

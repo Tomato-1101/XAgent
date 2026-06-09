@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from ... import service
-from ...commands import parse_command
+from ...commands import extract_tweet_ref, parse_command
 from ...cost import bill_formatter_usage
 from ...formatter import Formatter
 from ...guards import PolicyViolation
@@ -26,6 +26,7 @@ from ..schemas import (
     DraftRead,
     InterpretRequest,
     InterpretResponse,
+    QuoteFromUrlRequest,
     draft_to_read,
 )
 
@@ -226,6 +227,37 @@ def command(
                 template_id=req.template_id,
                 auto_template=req.auto_template,
             )
+    except PolicyViolation as e:
+        raise HTTPException(400, str(e))
+    return draft_to_read(draft)
+
+
+@router.post("/quote-from-url", response_model=DraftRead)
+def quote_from_url(
+    req: QuoteFromUrlRequest,
+    session: Session = Depends(db_session),
+    formatter: Formatter = Depends(get_formatter),
+    x_client: XClient | None = Depends(get_x_client_optional),
+) -> DraftRead:
+    """ツイートURLから引用案(引用RT)をAIに生成させる(Inboxの手動ボタン)。
+
+    監視の自動生成と同じ create_quote_draft を使い、相手投稿本文からコメントをAI生成する
+    (自分のコメントを添える引用は Compose の指令フローを使う)。
+    """
+    ref = extract_tweet_ref(req.url)
+    if ref is None:
+        raise HTTPException(400, "ツイートURL(x.com/.../status/<id>)を入力してください。")
+    tweet_id, handle, _url = ref
+    target_text, target_handle, target_created_at = _fetch_target(x_client, tweet_id)
+    try:
+        draft = service.create_quote_draft(
+            session,
+            formatter,
+            tweet_id,
+            target_text,
+            target_handle=handle or target_handle,
+            target_created_at=target_created_at,
+        )
     except PolicyViolation as e:
         raise HTTPException(400, str(e))
     return draft_to_read(draft)

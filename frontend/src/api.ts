@@ -124,6 +124,10 @@ export const api = {
     auto_template?: boolean;
   }) => req<Draft>("/compose/command", { method: "POST", body: JSON.stringify(payload) }),
 
+  // URLから引用案(引用RT)をAIに生成させる(Inboxの手動ボタン)
+  quoteFromUrl: (url: string) =>
+    req<Draft>("/compose/quote-from-url", { method: "POST", body: JSON.stringify({ url }) }),
+
   uploadMedia: async (file: File): Promise<MediaItem> => {
     const fd = new FormData();
     fd.append("file", file);

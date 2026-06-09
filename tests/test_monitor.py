@@ -90,6 +90,7 @@ def test_poll_targets_ignores_list_kind(session, fake_formatter):
 
 
 def test_run_once_summary(session, fake_formatter):
+    monitor.set_monitor_settings(session, mentions_enabled=True)  # 既定OFFのメンションを明示的にON
     session.add(EngageTarget(kind=TargetKind.MANUAL, handle="famous", user_id="u9", active=True))
     session.commit()
     fx = FakeXClient(
@@ -144,7 +145,7 @@ def test_poll_mentions_stores_target_text(session, fake_formatter):
 
 def test_max_drafts_per_run_caps_total(session, fake_formatter):
     """max_drafts_per_run が監視1サイクルの総生成数を上限で打ち切る。"""
-    monitor.set_monitor_settings(session, max_drafts_per_run=3)
+    monitor.set_monitor_settings(session, max_drafts_per_run=3, mentions_enabled=True)
     fx = FakeXClient(
         mentions=[{"id": str(100 + i), "text": f"m{i}", "author_id": "u1"} for i in range(10)],
     )
@@ -155,7 +156,7 @@ def test_max_drafts_per_run_caps_total(session, fake_formatter):
 
 def test_run_once_max_drafts_override(session, fake_formatter):
     """手動1回実行の max_drafts はその回だけ生成数を絞り、設定値より優先される。"""
-    monitor.set_monitor_settings(session, max_drafts_per_run=10)
+    monitor.set_monitor_settings(session, max_drafts_per_run=10, mentions_enabled=True)
     fx = FakeXClient(
         mentions=[{"id": str(100 + i), "text": f"m{i}", "author_id": "u1"} for i in range(10)],
     )
@@ -166,7 +167,9 @@ def test_run_once_max_drafts_override(session, fake_formatter):
 
 def test_budget_shared_across_sources(session, fake_formatter):
     """バジェットはメンションと対象アカウントで共有され、合計が上限を超えない。"""
-    monitor.set_monitor_settings(session, max_drafts_per_run=2, keyword_search_enabled=True)
+    monitor.set_monitor_settings(
+        session, max_drafts_per_run=2, keyword_search_enabled=True, mentions_enabled=True
+    )
     session.add(EngageTarget(kind=TargetKind.GENRE, keyword="AI", active=True))
     session.commit()
     fx = FakeXClient(
@@ -205,17 +208,18 @@ def test_within_age_passes_when_created_at_missing(session, fake_formatter):
     assert monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me") == (1, 0)
 
 
-def test_drops_simple_retweets(session, fake_formatter):
-    """単純リポスト(RT @…)には反応せず、本人のポストと引用RT(本人コメント有り)だけにリプ案を作る。"""
+def test_drops_reposts(session, fake_formatter):
+    """リポスト(単純RT・引用RT)には反応せず、対象アカウントの本人オリジナル投稿だけに案を作る。"""
     session.add(EngageTarget(kind=TargetKind.MANUAL, handle="famous", user_id="u9", active=True))
     session.commit()
     now = datetime.now(timezone.utc)
     fx = FakeXClient(timelines={"u9": [
-        {"id": "1", "text": "RT @other: 他人の投稿", "author_id": "u9", "created_at": now},
-        {"id": "2", "text": "これ良いね！ https://t.co/x", "author_id": "u9", "created_at": now},
-        {"id": "3", "text": "本人のオリジナル投稿", "author_id": "u9", "created_at": now},
+        {"id": "1", "text": "RT @other: 他人の投稿", "author_id": "u9", "created_at": now},  # 単純RT(本文判定)
+        {"id": "2", "text": "これ良いね！", "author_id": "u9", "created_at": now, "is_repost": True},  # 引用RT
+        {"id": "3", "text": "リポスト", "author_id": "u9", "created_at": now, "is_repost": True},  # RT(フラグ判定)
+        {"id": "4", "text": "本人のオリジナル投稿", "author_id": "u9", "created_at": now},
     ]})
     r, q = monitor.poll_targets(session, fx, fake_formatter)
-    assert (r, q) == (2, 2)  # 単純RT(id=1)を除いた2件 × (返信+引用)
+    assert (r, q) == (1, 1)  # オリジナル(id=4)のみ × (返信+引用)
     ids = {d.target_tweet_id for d in session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).all()}
-    assert ids == {"2", "3"}
+    assert ids == {"4"}

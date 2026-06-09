@@ -176,7 +176,9 @@ class MonitorSettings(SQLModel, table=True):
     """
 
     id: int | None = Field(default=None, primary_key=True)
-    mentions_enabled: bool = True
+    # 既定OFF: 自分宛メンション(自分のポストへの返信)は手動で返す方針。自動生成しない。
+    # トグルは残すのでONにすれば poll_mentions で返信案を作れる。
+    mentions_enabled: bool = False
     manual_targets_enabled: bool = True
     keyword_search_enabled: bool = False
     following_enabled: bool = False
