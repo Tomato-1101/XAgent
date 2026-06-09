@@ -677,15 +677,23 @@ override: `ensure_not_blackout(in_blackout, override, reason)` は `in_blackout 
 
 ## 11. 運用Runbook
 
-### 再起動
+### 再起動 / 自動反映
 
-launchd 常駐(`com.tomato.xagent`、`KeepAlive` 有効)。バックエンド差し替え後は:
+launchd 常駐(`com.tomato.xagent`、`KeepAlive` 有効)。plist は `~/Library/LaunchAgents/com.tomato.xagent.plist`。
+
+**コード変更は自動反映される(2026-06-09〜)。** plist の uvicorn 引数に `--reload --reload-dir /Users/tomato/Project/XAgent/xagent` を追加済みで、`xagent/` 配下の `.py` を**保存した瞬間(約1秒)に worker が再起動して新コードを読み直す**(手動 kickstart 不要)。`--reload-dir` を Python パッケージ(`xagent/`)に限定しているため、ルート直下の `xagent.db`・`media/`・ログ(`~/Library/Logs`)の書き込みでは再起動ループにならない(`watchfiles` を venv に導入済み)。さらに保険として **git `post-commit` フック**(`githooks/post-commit`、`core.hooksPath=githooks`)が**コミット毎に** `launchctl kickstart -k` で確実に作り直す(構文エラーで reloader 親ごと落ちた場合の復帰も兼ねる)。
+
+手動再起動が必要なのは **plist 自体の変更・依存追加・マイグレーション反映**のときだけ:
 
 ```
+# plist定義の変更を反映するとき(引数変更など。kickstartでは反映されない)
+launchctl bootout gui/$(id -u)/com.tomato.xagent
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tomato.xagent.plist
+# 通常の手動再起動(plist定義は不変・プロセスだけ作り直す)
 launchctl kickstart -k gui/$(id -u)/com.tomato.xagent
 ```
 
-(`<label>` は `com.tomato.xagent`)。plist は `~/Library/LaunchAgents/com.tomato.xagent.plist`。
+`--reload` は reloader(親, PPID=launchd)+ worker(子)の2プロセス構成になる。`kill` は使わない(launchd が即再生成)。予約投稿は DB 永続(`status==QUEUED`+`scheduled_at`)で `queue_tick`(60秒)・`reconcile_missed_schedules`(猶予30分)が再検索するため、reload の数秒再起動で取りこぼし・二重投稿は起きない。
 
 ### テスト
 

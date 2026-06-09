@@ -1,0 +1,9 @@
+#!/bin/sh
+# コミット確定後に launchd ジョブ(稼働中 uvicorn)を再起動し、最新コードを確実に反映する。
+#
+# なぜ: uvicorn の --reload は xagent/ 配下の .py 保存で即反映するが、(1)構文エラー等で
+# reloader 親ごと落ちた場合や (2)コミット境界での確実な作り直しの保険として、kickstart -k を
+# 1回流す(冪等)。これにより「コミットしたのに常駐へ反映漏れ」(過去3日間の不具合の主因)を
+# --reload と二重に潰す。非同期(&)でコミット完了をブロックしない。
+launchctl kickstart -k "gui/$(id -u)/com.tomato.xagent" >/dev/null 2>&1 &
+exit 0
