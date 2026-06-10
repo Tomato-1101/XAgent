@@ -393,7 +393,7 @@ export default function Queue({ me }: { me: Me | null }) {
             </div>
             {pending.draft.segments.map((s, i) => (
               <div key={i} className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-sm">
-                <span className="whitespace-pre-wrap">{s}</span>
+                <span className="whitespace-pre-wrap break-words">{s}</span>
               </div>
             ))}
           </div>

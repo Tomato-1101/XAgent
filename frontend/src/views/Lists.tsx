@@ -175,7 +175,7 @@ export default function Lists() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold">Lists</h1>
           <p className="mt-1 text-sm text-zinc-500">
@@ -183,7 +183,7 @@ export default function Lists() {
             メンバー情報の取得は安価な読取API経由です。
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex shrink-0 gap-2">
           <Button onClick={loadLists} disabled={loading} variant="outline">
             {loading ? <Spinner /> : "更新"}
           </Button>
@@ -239,9 +239,9 @@ export default function Lists() {
               (selected?.id === l.id ? "ring-1 ring-sky-500/60" : "")
             }
           >
-            <button className="flex-1 text-left" onClick={() => selectList(l)}>
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-zinc-100">{l.name}</span>
+            <button className="min-w-0 flex-1 text-left" onClick={() => selectList(l)}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="truncate font-medium text-zinc-100">{l.name}</span>
                 <Badge tone={l.private ? "zinc" : "green"}>{l.private ? "非公開" : "公開"}</Badge>
                 <span className="text-xs text-zinc-500">{l.member_count}人</span>
               </div>
@@ -317,7 +317,7 @@ export default function Lists() {
                         <div className="truncate text-xs text-zinc-500">{m.description}</div>
                       )}
                     </div>
-                    <span className="shrink-0 text-xs text-zinc-500">
+                    <span className="hidden shrink-0 text-xs text-zinc-500 sm:inline">
                       {m.followers_count.toLocaleString()} フォロワー
                     </span>
                     <Button size="sm" variant="ghost" onClick={() => removeMember(m)}>

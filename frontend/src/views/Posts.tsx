@@ -118,14 +118,14 @@ export default function Posts() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold">Posts</h1>
           <p className="mt-1 text-sm text-zinc-500">
             自分の直近1週間の投稿。通常リポスト（コメント無し）で再拡散できます。
           </p>
         </div>
-        <Button onClick={refresh} disabled={loading} variant="outline">
+        <Button onClick={refresh} disabled={loading} variant="outline" className="shrink-0 self-start">
           {loading ? <Spinner /> : "Xから更新"}
         </Button>
       </div>
@@ -153,7 +153,7 @@ export default function Posts() {
                 Xで開く
               </a>
             </div>
-            <div className="whitespace-pre-wrap text-sm text-zinc-100">{p.text}</div>
+            <div className="whitespace-pre-wrap break-words text-sm text-zinc-100">{p.text}</div>
             <div className="flex flex-wrap gap-2 pt-1">
               <Button size="sm" variant="danger" onClick={() => openRepostNow(p)}>
                 今すぐリポスト
@@ -179,7 +179,7 @@ export default function Posts() {
       >
         {pending && (
           <div className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-sm">
-            <span className="whitespace-pre-wrap">{pending.post.text}</span>
+            <span className="whitespace-pre-wrap break-words">{pending.post.text}</span>
           </div>
         )}
       </ConfirmDialog>
@@ -198,7 +198,7 @@ export default function Posts() {
         <div className="space-y-3">
           {pending && (
             <div className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-sm">
-              <span className="whitespace-pre-wrap">{pending.post.text}</span>
+              <span className="whitespace-pre-wrap break-words">{pending.post.text}</span>
             </div>
           )}
           <SchedulePicker value={schedAt} onChange={setSchedAt} recommended={rec} />

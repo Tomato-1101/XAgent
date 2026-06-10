@@ -57,7 +57,7 @@ export default function Analytics() {
       </Card>
 
       {/* X / Claude 内訳 */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <div className="text-sm text-zinc-400">X API</div>
           <div className="mt-1 text-2xl font-semibold">${cost?.x_api.cost_usd ?? 0}</div>

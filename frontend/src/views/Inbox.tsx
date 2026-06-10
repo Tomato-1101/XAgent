@@ -258,7 +258,7 @@ export default function Inbox({ me }: { me: Me | null }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold">Inbox</h1>
           <p className="mt-1 text-sm text-zinc-500">
@@ -284,7 +284,7 @@ export default function Inbox({ me }: { me: Me | null }) {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-2">
+      <div className="flex flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-2 sm:flex-row sm:items-center">
         <span className="shrink-0 text-xs text-zinc-500">URLから引用案を作る</span>
         <Input
           type="text"
@@ -343,7 +343,7 @@ export default function Inbox({ me }: { me: Me | null }) {
             </div>
             {pending.segments.map((s, i) => (
               <div key={i} className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-sm">
-                <span className="whitespace-pre-wrap">{s}</span>
+                <span className="whitespace-pre-wrap break-words">{s}</span>
               </div>
             ))}
           </div>

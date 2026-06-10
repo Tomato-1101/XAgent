@@ -103,7 +103,7 @@ export default function Style() {
           value={guide}
           onChange={(e) => setGuide(e.target.value)}
         />
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button onClick={save}>保存</Button>
           <Button variant="outline" onClick={learnOwn} disabled={busy}>
             {busy ? <Spinner /> : "自分の過去投稿を学習 (X API)"}

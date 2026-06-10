@@ -216,19 +216,19 @@ export default function Settings() {
             <div className="space-y-2">
               <div className="text-xs text-zinc-500">時間帯（その日の制限帯。複数可）</div>
               {bo.windows.map((w, i) => (
-                <div key={i} className="flex items-center gap-2">
+                <div key={i} className="flex flex-wrap items-center gap-2">
                   <Input
                     type="time"
                     value={w[0]}
                     onChange={(e) => setWindow(i, 0, e.target.value)}
-                    className="w-32"
+                    className="w-28"
                   />
                   <span className="text-zinc-500">〜</span>
                   <Input
                     type="time"
                     value={w[1]}
                     onChange={(e) => setWindow(i, 1, e.target.value)}
-                    className="w-32"
+                    className="w-28"
                   />
                   <Button size="sm" variant="ghost" onClick={() => removeWindow(i)}>
                     削除

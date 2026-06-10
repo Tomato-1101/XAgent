@@ -111,8 +111,8 @@ export default function Targets() {
 
       <div className="space-y-2">
         {targets.map((t) => (
-          <Card key={t.id} className="flex items-center justify-between py-3">
-            <div className="flex items-center gap-3">
+          <Card key={t.id} className="flex items-center justify-between gap-2 py-3">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
               {t.kind === "list" ? (
                 <>
                   <span className="font-medium">📋 {t.handle}</span>
@@ -131,7 +131,7 @@ export default function Targets() {
                 </>
               )}
             </div>
-            <Button size="sm" variant="danger" onClick={() => remove(t.id)}>
+            <Button size="sm" variant="danger" className="shrink-0" onClick={() => remove(t.id)}>
               削除
             </Button>
           </Card>
