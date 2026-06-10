@@ -109,11 +109,15 @@ export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
 }
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  // 呼び出し側が w-16 等の幅を指定したら基底の w-full を外す(生成CSSでは w-full が後置で
+  // 常に勝ってしまい、スマホ幅で隣のラベルを潰すため)。
+  const hasWidth = /(^|\s)w-/.test(props.className ?? "");
   return (
     <input
       {...props}
       className={cn(
-        "h-9 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-sky-500/50",
+        "h-9 rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-sky-500/50",
+        !hasWidth && "w-full",
         props.className
       )}
     />

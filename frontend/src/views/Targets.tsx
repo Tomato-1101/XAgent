@@ -86,7 +86,7 @@ export default function Targets() {
               </option>
             ))}
           </select>
-          <Button onClick={addList} disabled={!listId}>
+          <Button onClick={addList} disabled={!listId} className="shrink-0">
             追加
           </Button>
         </div>
@@ -103,7 +103,7 @@ export default function Targets() {
           onChange={(e) => setHandle(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && add()}
         />
-        <Button onClick={add}>追加</Button>
+        <Button onClick={add} className="shrink-0">追加</Button>
       </Card>
 
       {error && <div className="text-sm text-red-300">エラー: {error}</div>}

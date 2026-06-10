@@ -39,8 +39,8 @@ export function AgentHint({
         onClick={() => setOpen(!open)}
         className="flex w-full items-center justify-between gap-2 text-left text-sky-300"
       >
-        <span>🤖 {title}</span>
-        <span className="shrink-0 text-xs text-sky-400/70">
+        <span className="shrink-0">🤖 {title}</span>
+        <span className="text-right text-xs text-sky-400/70">
           {open ? "閉じる" : "ターミナルのClaude Codeに話すと自動でできます"}
         </span>
       </button>
