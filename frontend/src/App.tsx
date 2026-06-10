@@ -14,6 +14,7 @@ import Style from "./views/Style";
 import Settings from "./views/Settings";
 import Analytics from "./views/Analytics";
 import Agent from "./views/Agent";
+import Login from "./views/Login";
 
 type View =
   | "compose"
@@ -54,6 +55,14 @@ export default function App() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [sched, setSched] = useState<SchedulerStatus | null>(null);
+  const [needLogin, setNeedLogin] = useState(false);
+
+  // サーバが API_TOKEN を設定しているときだけ 401→このイベントが飛ぶ(ローカル運用では出ない)。
+  useEffect(() => {
+    const onUnauthorized = () => setNeedLogin(true);
+    window.addEventListener("xagent:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("xagent:unauthorized", onUnauthorized);
+  }, []);
 
   useEffect(() => {
     const ping = () => {
@@ -74,6 +83,19 @@ export default function App() {
   useEffect(() => {
     api.me().then(setMe).catch(() => setMe(null));
   }, [online]);
+
+  if (needLogin) {
+    return (
+      <Login
+        onSuccess={() => {
+          setNeedLogin(false);
+          api.health().then(() => setOnline(true)).catch(() => setOnline(false));
+          api.status().then(setSched).catch(() => setSched(null));
+          api.me().then(setMe).catch(() => setMe(null));
+        }}
+      />
+    );
+  }
 
   return (
     <ToastProvider>

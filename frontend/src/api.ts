@@ -22,7 +22,25 @@ import type {
   XListMember,
 } from "./types";
 
-const BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+// 本番(FastAPIが frontend/dist を配信=same-origin)は相対パス、vite dev(:5180)時のみ :8000 へ。
+const BASE =
+  import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://localhost:8000" : "");
+
+// API_TOKEN 認証(サーバ側で設定時のみ有効)。端末ごとに localStorage に保持する。
+const TOKEN_KEY = "xagent_api_token";
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { "X-API-Token": token } : {};
+}
 
 /** 保持パス(media/xxx.jpg)からプレビュー用URLを作る。 */
 export function mediaUrl(path: string): string {
@@ -32,10 +50,12 @@ export function mediaUrl(path: string): string {
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     ...init,
   });
   if (!res.ok) {
+    // トークン不正/未入力。App がこのイベントを拾ってログイン画面を出す。
+    if (res.status === 401) window.dispatchEvent(new Event("xagent:unauthorized"));
     let detail = `${res.status}`;
     try {
       const body = await res.json();
@@ -135,8 +155,13 @@ export const api = {
     const fd = new FormData();
     fd.append("file", file);
     // Content-Type は指定しない(ブラウザが multipart 境界を付ける)
-    const res = await fetch(`${BASE}/media/upload`, { method: "POST", body: fd });
+    const res = await fetch(`${BASE}/media/upload`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: fd,
+    });
     if (!res.ok) {
+      if (res.status === 401) window.dispatchEvent(new Event("xagent:unauthorized"));
       let detail = `${res.status}`;
       try {
         const b = await res.json();
