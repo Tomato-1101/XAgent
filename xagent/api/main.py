@@ -8,9 +8,11 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
@@ -19,7 +21,7 @@ from ..config import get_settings
 from ..db import init_db
 from ..media import media_dir
 from ..x_client import XClient, XClientError
-from .deps import db_session, get_x_client
+from .deps import db_session, get_x_client, require_api_token
 from .routes import (
     analytics,
     compose,
@@ -96,7 +98,7 @@ def health() -> dict:
     return {"status": "ok", "version": __version__}
 
 
-@app.get("/me")
+@app.get("/me", dependencies=[Depends(require_api_token)])
 def me(x_client: XClient = Depends(get_x_client)) -> dict:
     """現在の投稿先アカウント。UIの確認ダイアログ表示・投稿URL生成に使う。"""
     try:
@@ -105,7 +107,7 @@ def me(x_client: XClient = Depends(get_x_client)) -> dict:
         return {"id": None, "username": None}
 
 
-@app.get("/status")
+@app.get("/status", dependencies=[Depends(require_api_token)])
 def status(session: Session = Depends(db_session)) -> dict:
     """予約スケジューラの稼働状況。UIが「予約投稿の常駐が動いているか」を表示するための情報。
 
@@ -164,4 +166,29 @@ app.include_router(lists.router)
 app.include_router(templates.router)
 
 # 添付画像/動画のプレビュー配信(ローカル)。アップロードAPIは /media/upload、配信は /media/files。
+# 注: <img>/<video> タグはカスタムヘッダを送れないため、この静的配信だけは X-API-Token 保護の
+# 対象外(tailnet内限定の露出として許容)。
 app.mount("/media/files", StaticFiles(directory=media_dir()), name="media-files")
+
+# フロント(React)のビルド成果物を同一オリジンで配信する(スマホ等は :8000 だけ見ればよい)。
+# 開発時は従来どおり vite dev(:5180) を使うのでここは本番UI専用。
+FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+# check_dir=False: dist 未ビルドでも起動を止めない(その間 /assets は404、ビルド後は再起動不要)。
+app.mount(
+    "/assets",
+    StaticFiles(directory=FRONTEND_DIST / "assets", check_dir=False),
+    name="spa-assets",
+)
+
+
+@app.get("/", include_in_schema=False)
+def spa_index():
+    index = FRONTEND_DIST / "index.html"
+    if not index.is_file():
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "frontend未ビルド: cd frontend && npm run build を実行してください。"},
+        )
+    # index.html はキャッシュさせない(古いUIがスマホに残るのを防ぐ。ハッシュ付き assets は既定のまま)。
+    return FileResponse(index, headers={"Cache-Control": "no-cache"})

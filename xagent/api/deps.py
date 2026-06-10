@@ -19,7 +19,8 @@ from ..x_client import XClient, XClientError
 def require_api_token(x_api_token: str | None = Header(default=None)) -> None:
     """`config.api_token` を設定したときだけ X-API-Token を必須にする。
 
-    未設定(既定)ならローカル開放のまま(挙動不変)。書き込み系ルータに適用する。
+    未設定(既定)ならローカル開放のまま(挙動不変)。全ルータと /me /status に適用する
+    (リモートアクセス用。開放は /health と /media/files 静的配信のみ)。
     """
     token = get_settings().api_token
     if token and x_api_token != token:
