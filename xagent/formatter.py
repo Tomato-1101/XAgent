@@ -2,17 +2,20 @@
 
 設計:
 - LLM呼び出しは `complete(system, user) -> str` という関数に抽象化し、依存注入できる。
-  既定は Anthropic SDK。テストはフェイクを注入してロジックを検証する。
+  既定は Claude Code CLI のヘッドレス使い捨てセッション(claude_cli.run_claude、
+  サブスクリプション課金)。テストはフェイクを注入してロジックを検証する。
 - 折りたたみ閾値(加重280)に収めるのを既定とし、長文(allow_long)は明示時のみ。
 - スレッド分割は text.split_into_thread に委譲。
 """
 
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import dataclass
 from typing import Callable
 
+from .claude_cli import run_claude
 from .config import Settings, get_settings
 from .text import FOLD_THRESHOLD_WEIGHTED, exceeds_fold, split_into_thread, weighted_length
 
@@ -71,7 +74,7 @@ class Formatter:
         self, settings: Settings | None = None, complete: CompleteFn | None = None
     ) -> None:
         self.settings = settings or get_settings()
-        self._complete = complete or self._anthropic_complete
+        self._complete = complete or self._claude_cli_complete
         # この整形器インスタンスで消費した Claude トークン(コスト記録用に蓄積)
         self.usage_input = 0
         self.usage_output = 0
@@ -80,27 +83,23 @@ class Formatter:
         """整形以外(プロファイル抽出等)でもLLMを使えるよう公開する。"""
         return self._complete(system, user)
 
-    def _anthropic_complete(self, system: str, user: str) -> str:
-        import anthropic
+    def _claude_cli_complete(self, system: str, user: str) -> str:
+        res = run_claude(system, user, self.settings)
+        self.usage_input += res.input_tokens
+        self.usage_output += res.output_tokens
+        return res.text
 
-        if not self.settings.anthropic_api_key:
-            raise RuntimeError(
-                "ANTHROPIC_API_KEY が未設定です。.env を設定してください。"
-            )
-        client = anthropic.Anthropic(api_key=self.settings.anthropic_api_key)
-        msg = client.messages.create(
-            model=self.settings.claude_model,
-            max_tokens=_MAX_TOKENS,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        usage = getattr(msg, "usage", None)
-        if usage is not None:
-            self.usage_input += int(getattr(usage, "input_tokens", 0) or 0)
-            self.usage_output += int(getattr(usage, "output_tokens", 0) or 0)
-        return "".join(
-            getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text"
-        ).strip()
+    def _run_structured(self, system: str, user: str, schema: dict) -> dict | None:
+        """JSONスキーマ強制で1回実行し、構造化出力(dict)を返す。テストで差し替え可能。"""
+        res = run_claude(system, user, self.settings, json_schema=schema)
+        self.usage_input += res.input_tokens
+        self.usage_output += res.output_tokens
+        if res.structured is not None:
+            return res.structured
+        try:
+            return json.loads(res.text)
+        except (json.JSONDecodeError, TypeError):
+            return None
 
     def _post_system(
         self,
@@ -238,26 +237,120 @@ class Formatter:
         text = self._complete(system, user).strip()
         return FormatResult([text], exceeds_fold(text), weighted_length(text))
 
-    # --- 絡み方の判断(リプライ or 引用RT) ---
-    def decide_engage_type(self, target_text: str, target_handle: str = "") -> str:
-        """相手の投稿に「リプライ」と「引用RT」どちらで絡むのが良いかを判断する。
+    # --- 絡み候補のバッチ選定(分散・reply/quote判断・本文生成まで1回で行う) ---
+    _SELECT_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "selections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "tweet_id": {"type": "string"},
+                        "kind": {"type": "string", "enum": ["reply", "quote"]},
+                        "text": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["tweet_id", "kind", "text", "reason"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["selections"],
+        "additionalProperties": False,
+    }
 
-        'reply' か 'quote' を返す。同じ投稿に2案作らず、良い方だけを生成するための判断。
-        - reply: 相手のスレッドに短い共感で割り込んで露出を取る方が自然(会話・あるある・反応)。
-          会話的な投稿、相手に直接話しかける方が映える内容、伸び始めのバズへの相乗り。主力。
-        - quote: 自分のフォロワーへ拡散する価値がある投稿で、自分の視点/一次情報を一段添えたい時
-          (ニュース・知見・主張の紹介＋自分の意見)。ブロードキャストしたい時。
-        判断に迷う/情報不足なら 'reply'(露出重視のデフォルト)。
+    # 同一アカウントからの選定上限(コード側の保証。プロンプトでも「原則1件」を指示する)
+    _SELECT_MAX_PER_AUTHOR = 2
+
+    def select_engagements(
+        self,
+        candidates: list[dict],
+        max_n: int,
+        style_guide: str = "",
+        examples: list[str] | None = None,
+        reply_playbook: str = "",
+        quote_playbook: str = "",
+    ) -> list[dict]:
+        """直近24hの候補投稿一覧から、絡む価値が高いものを最大 max_n 件まとめて選定する。
+
+        1回のバッチ判断で「どの投稿に絡むか(分散)」「reply/quote どちらか」「本文」まで
+        生成する。従来の直列スキャン＋投稿ごと判断は、先頭アカウントがバジェットを使い切り
+        同一アカウント偏りを生んだため、全候補を俯瞰するこの方式に置き換えた。
+        返り値は {tweet_id, kind, text, reason, candidate} のリスト(candidate は元候補dict)。
         """
-        system = (
-            "あなたは日本語Xアカウントの運用アシスタント。相手の投稿に絡むとき、"
-            "『リプライ(reply)』と『引用RT(quote)』のどちらが効果的かを判断する。\n"
-            "- reply: 相手のスレッドに短い共感・反応で割り込んで露出を取る方が自然な投稿"
-            "(会話的・あるある・伸び始めのバズへの相乗り)。これが主力・デフォルト。\n"
-            "- quote: 自分のフォロワーに広める価値があり、自分の視点や一次情報を一段添えたい投稿"
-            "(ニュース/知見/主張の紹介＋自分の意見)。\n"
-            "迷ったら reply。出力は 'reply' か 'quote' の一語だけ。"
-        )
-        user = f"相手(@{target_handle})の投稿:\n{target_text}\n\nreply か quote の一語だけ返す。"
-        out = self._complete(system, user).strip().lower()
-        return "quote" if "quote" in out else "reply"
+        if not candidates or max_n <= 0:
+            return []
+        blocks = []
+        if reply_playbook.strip():
+            blocks.append(f"## リプライの型(reply の本文はこれに沿う)\n{reply_playbook.strip()}")
+        if quote_playbook.strip():
+            blocks.append(f"## 引用RTの型(quote の本文はこれに沿う)\n{quote_playbook.strip()}")
+        sb = _style_block(style_guide, examples)
+        if sb:
+            blocks.append(sb)
+        guide = "\n\n".join(blocks)
+        system = f"""あなたは日本語Xアカウントの運用アシスタント。直近24時間の候補投稿一覧から「絡む価値が高い投稿」を最大{max_n}件選び、それぞれにリプライ(reply)か引用RT(quote)かを判断し、本文まで作る。
+
+選定ルール:
+- 自分が本当に返信したいと思う投稿だけ選ぶ。無理に{max_n}件埋めない(良い候補が少なければ少なく返す)。
+- 特定のアカウントに偏らせない。同一アカウントからは原則1件、多くても2件まで。
+- 会話が生まれそうな投稿、伸び始めの投稿、いいね/RTが付き始めている投稿を優先する。
+
+reply / quote の判断基準:
+- reply: 相手のスレッドに短い共感・反応で割り込んで露出を取る方が自然な投稿(会話的・あるある・伸び始めのバズへの相乗り)。これが主力・デフォルト。迷ったら reply。
+- quote: 自分のフォロワーに広める価値があり、自分の視点や一次情報を一段添えたい投稿(ニュース/知見/主張の紹介＋自分の意見)。
+
+本文ルール:
+- 必ず140字(日本語の字数)以内。1字も超えない。
+- 具体や知識は無理に足さない。素の共感・面白がり・一言ツッコミでよい(「あ、そうですよね」「これ面白い」「わかる」級)。短く本音っぽいほど伸びる。
+- 媚びすぎ・定型の褒めは避ける。賢く見せようと説明的・解説的になるのはもっと避ける。本人の口調を保つ。
+- 案ごとに長さをばらす(ごく短い一言〜しっかり具体まで)。全案を同じ長さにしない。
+- reason には選んだ理由と型の判断根拠を日本語で簡潔に書く。
+
+{guide}""".strip()
+        lines = []
+        for c in candidates:
+            item = {
+                "tweet_id": str(c.get("tweet_id", "")),
+                "handle": c.get("handle") or "",
+                "text": c.get("text", ""),
+                "created_at": str(c.get("created_at") or ""),
+                "like_count": c.get("like_count", 0),
+                "retweet_count": c.get("retweet_count", 0),
+            }
+            lines.append(json.dumps(item, ensure_ascii=False))
+        user = "候補投稿一覧(1行1件のJSON):\n" + "\n".join(lines)
+        data = self._run_structured(system, user, self._SELECT_SCHEMA)
+        by_id = {str(c.get("tweet_id", "")): c for c in candidates}
+        out: list[dict] = []
+        seen_ids: set[str] = set()
+        author_count: dict[str, int] = {}
+        for s in (data or {}).get("selections", []):
+            tid = str(s.get("tweet_id", ""))
+            cand = by_id.get(tid)
+            if cand is None or tid in seen_ids:
+                continue
+            text = str(s.get("text", "")).strip()
+            if not text or len(text) > 140:
+                continue
+            kind = str(s.get("kind", "")).strip().lower()
+            if kind not in ("reply", "quote"):
+                kind = "reply"
+            author = str(cand.get("handle") or "")
+            if author_count.get(author, 0) >= self._SELECT_MAX_PER_AUTHOR:
+                continue
+            author_count[author] = author_count.get(author, 0) + 1
+            seen_ids.add(tid)
+            out.append(
+                {
+                    "tweet_id": tid,
+                    "kind": kind,
+                    "text": text,
+                    "reason": str(s.get("reason", "")).strip(),
+                    "candidate": cand,
+                }
+            )
+            if len(out) >= max_n:
+                break
+        return out

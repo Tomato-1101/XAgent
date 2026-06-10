@@ -11,7 +11,8 @@
 - **自分のXアカウントへの書き込み（投稿/RT/リスト作成・メンバー追加）＝公式X API（tweepy/OAuth1.0a）のみ。** twitterapi.io は**読み取り専用**（ハンドル解決・メンバー閲覧）。書き込みに使わない。
 - **自動投稿はしない。** 下書きは必ず人間の承認を要する。スケジューラ/デーモンが投稿してよいのは「ユーザーが承認し予約済みで発火時刻に達した下書き」だけ（`status==QUEUED` かつ `scheduled_at` 設定済みかつ期限到来）。生成系（monitor）は下書きを作るだけで投稿しない。
 - **秘密情報（`.env`, `.env.*`, APIキー, credentials, `*.pem`, `*.key`）は読まない/出力しない/コミットしない。**
-- 緊急停止は `config.posting_enabled`。予約投稿の発火は常時動かす方針（止めない）。**絡み案の自動生成（monitor_tick）は `MonitorSettings.auto_monitor_enabled` でUIオンオフ（既定OFF・乱造防止。終わったらOFFに戻す運用）**。手動1回は Inbox「監視を1回実行」/ CLI `xagent monitor-once`。対象アカウントへの絡みは引用案ではなく**リプライ案**で生成する。
+- 緊急停止は `config.posting_enabled`。予約投稿の発火は常時動かす方針（止めない）。**絡み案の自動生成（monitor_tick）は `MonitorSettings.auto_monitor_enabled` でUIオンオフ（既定OFF・乱造防止。終わったらOFFに戻す運用）**。手動1回は Inbox「監視を1回実行」/ CLI `xagent monitor-once`。絡み案は**直近24時間の候補を1回のバッチAI判断で分散選定**（同一アカウント原則1件・最大2件）し、reply/quote と本文まで AI が決める（`formatter.select_engagements`）。
+- **LLM 処理は全て Claude Code CLI のヘッドレス使い捨てセッション**（`xagent/claude_cli.py`、subscription/OAuth 課金、モデル `claude-opus-4-8`）。Anthropic API（従量課金）と `anthropic` SDK は使わない。CLI に `--bare` を付けない（OAuth が読めなくなる）。
 
 ## 常駐構成（→ memory `xagent-daemon-architecture` と概要doc §10）
 

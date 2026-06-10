@@ -17,9 +17,9 @@ PRICE_USD: dict[CostKind, float] = {
     CostKind.TL: 0.01,
 }
 
-# Claude(Anthropic) のトークン単価(USD / 100万トークン)。
-# 【推測】claude-sonnet-4-6 の標準価格(入力$3 / 出力$15)を既定にする。価格改定時はここを更新。
-LLM_PRICE_PER_MTOK: dict[str, float] = {"input": 3.0, "output": 15.0}
+# Claude のトークン単価(USD / 100万トークン)。claude-opus-4-8 の標準価格(入力$5 / 出力$25)。
+# 実課金はサブスクリプション(Claude Code CLI)だが、消費の可視化のため名目額を記録し続ける。
+LLM_PRICE_PER_MTOK: dict[str, float] = {"input": 5.0, "output": 25.0}
 
 
 def log_cost(

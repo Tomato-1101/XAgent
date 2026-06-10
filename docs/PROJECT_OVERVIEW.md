@@ -65,7 +65,8 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `xagent/models.py` | SQLModel エンティティと Enum 定義 |
 | `xagent/db.py` | エンジン・初期化・冪等マイグレーション・シード |
 | `xagent/config.py` | `.env` 設定(`Settings`) |
-| `xagent/formatter.py` | LLM(Claude)抽象。整形・案複数生成・返信/引用生成 |
+| `xagent/formatter.py` | LLM(Claude)抽象。整形・案複数生成・返信/引用生成・絡み候補のバッチ選定 |
+| `xagent/claude_cli.py` | Claude Code CLI のヘッドレス使い捨てセッション実行(`run_claude`、subscription課金) |
 | `xagent/prompts.py` | バズの型(playbook)定数(A〜P / R1〜R6 / 引用) |
 | `xagent/templates.py` | 「型」(`PromptTemplate`)の CRUD・既定切替・AI 自動選択・シード |
 | `xagent/style.py` | 文体ガイド(`StyleProfile`)・過去投稿学習(`PastPost`) |
@@ -371,8 +372,8 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 ### 監視・絡み(§10 に動作詳細)
 
-- **監視ソース**: メンション(reply案、**既定オフ=手動返信方針**)/手動MANUAL対象/Xリスト/ジャンルkeyword(既定オフ)/フォロー中(既定オフ)。絡み対象は**本人オリジナル投稿のみ**(RT・引用RT・3日超は除外)。
-- **AIが絡み方を1案に判断(`_emit_engage_drafts` → `formatter.decide_engage_type`)**: 1投稿につき返信案・引用案を両方作らず、AI が「reply / quote」のどちらが効果的かを判断して**良い方の1案だけ**生成する(コスト・件数を半減。迷えば reply)。`run_once` の総生成数バジェット(`max_drafts_per_run`)では1投稿=1件として数える。メンション(自分宛)は引用RTせず常に reply。
+- **監視ソース**: メンション(reply案、**既定オフ=手動返信方針**)/手動MANUAL対象/Xリスト/ジャンルkeyword(既定オフ)/フォロー中(既定オフ)。絡み対象は**本人オリジナル投稿のみ**(RT・引用RT・**24時間超**は除外)。
+- **AIバッチ選定(`collect_engage_candidates` → `formatter.select_engagements`)**: 全有効ソースの直近24時間の候補を**1回のバッチAI判断**にまとめて渡し、「どの投稿に絡むか(分散)」「reply / quote のどちらか」「本文」までを一度に生成する(従来の直列スキャン＋投稿ごと判断は先頭アカウントがバジェットを使い切り同一アカウント偏りを生んだため廃止)。**同一アカウントは原則1件・最大2件**(プロンプト指示＋コード側でも3件目以降を破棄)。選定結果は `service.create_engage_draft_from_text` で LLM を呼ばずそのまま Draft 化(選定理由を `source_text` に `[AI選定理由]` として保持)。`run_once` の総生成数バジェット(`max_drafts_per_run`)が選定の `max_n` になる。メンション(自分宛)は従来通り個別生成・引用RTせず常に reply。
 - **絡み対象(EngageTarget)**: MANUAL(user_id 直接)/LIST(list_id を毎回メンバー展開)/GENRE(keyword 検索)/FOLLOWING(Enum はあるが poll は EngageTarget を読まず自分のフォローを直接巡回)。
 - **返信/引用生成(generate_reply / generate_quote)**: 相手投稿から AI が本文生成。返信は `_REPLY_LENGTH_BANDS` から `random.choice` で長さ帯を選び、毎回同じ長さに寄るのを防ぐ。常に1セグメント(分割しない)、140字厳守。
 - **型の事後切替(`service.recast_engage_draft` / `POST /drafts/{id}/recast`)**: AI が選んだ型を人が上書きする導線。未承認(DRAFT)の REPLY⇄QUOTE 間でのみ、新しい型で本文を再生成し `kind` を差し替える(元ポスト情報は維持)。Inbox の「引用RTで送る」「手動で返信に切替」ボタンから呼ぶ。DRAFT 以外/POST 種別は `PolicyViolation`(API は 409)。
@@ -383,7 +384,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 ### 分析・メディア・その他
 
-- **分析(コスト)**: `ApiCostLog` を X API(read/write/tl)と Claude API(llm)に分けて集計、合計も返す(`GET /analytics/cost`)。単価: READ $0.005/件、WRITE $0.01/件、TL $0.01/件、LLM はトークン課金(`LLM_PRICE_PER_MTOK={"input":3.0,"output":15.0}` USD/Mtok、【推測】claude-sonnet-4-6 価格)。
+- **分析(コスト)**: `ApiCostLog` を X API(read/write/tl)と Claude(llm)に分けて集計、合計も返す(`GET /analytics/cost`)。単価: READ $0.005/件、WRITE $0.01/件、TL $0.01/件、LLM はトークン換算(`LLM_PRICE_PER_MTOK={"input":5.0,"output":25.0}` USD/Mtok、claude-opus-4-8 価格)。実課金はサブスクリプション(Claude Code CLI)だが消費の可視化のため名目額を記録し続ける。
 - **分析(サマリ)**: 全 `DraftStatus` のステータス別下書き件数(`GET /analytics/summary`)。
 - **メディア(media)**: 画像(jpg/jpeg/png/webp/gif)最大4枚・動画(mp4/mov/m4v)1個・25MB上限。混在不可。保存は `<uuid4hex><ext>`、DB には相対パス。実際の X アップロードは投稿直前(`media_id` 失効回避)。
 - **おすすめ時間(recommended_times)**: UI 初期値用に重ならない直近 count 件のスロットを返す(`GET /schedule/recommended`)。tier は best(21時)/great(19・22時)/good(8・12・16時)。
@@ -625,26 +626,21 @@ CLI とほぼ対応する。差分・専用ツール:
 
 ### 受信監視・絡み案生成(`monitor.run_once`)
 
-`run_once(session, x_client, formatter, me_user_id, max_drafts=None) -> {"reply_suggestions": replies, "quote_suggestions": quotes}` が1監視サイクル。**絡み対象(手動MANUAL/リストLIST/ジャンルGENRE/フォロー)の新規投稿には、1投稿につきAIが返信案(kind=reply)と引用案(kind=quote/引用RT)の良い方を判断して1件だけ生成する**(`_emit_engage_drafts` → `formatter.decide_engage_type`。両方は作らずコスト・件数を半減。迷えば reply。型を変えたいときは Inbox の切替ボタン=`recast_engage_draft` で後から作り直す)。**自分宛メンションは返信案のみ**(自分宛は引用RTしないので `quote_suggestions` には乗らない)。投稿はせず未承認下書き(`status=DRAFT`)を生成する。X はストリーム取得不可のため定期ポーリングで、`MonitorCursor` の `since_id` で重複を防ぐ。各ソースは取得後、**投稿日時が3日以内(`TARGET_MAX_AGE_DAYS=3`)のものだけに絞る(`_within_age`)**＝古い投稿への無意味なリプ案・初回大量取得による乱造を防ぐ(`created_at` が取れないものは判定不能として通す)。さらに**リポスト(単純RT・引用RT)は除外(`_drop_reposts`)**し、**対象アカウントの本人オリジナル投稿だけ**に反応する。判定は正規化辞書の `is_repost`(twitterapi.io は `retweeted_tweet`/`quoted_tweet` の有無、公式API は `referenced_tweets` の type=retweeted/quoted)＋後方互換の本文 `RT @` 始まり。**自分宛メンション(自分のポストへの返信)は既定OFF**(`mentions_enabled=False`、手動で返す方針)。これらの対象ルールは memory `xagent-monitor-targeting-rules` に恒久記録。生成数バジェット(`max_drafts_per_run`)は全ソースで共有する総生成数上限(1投稿=1件として数える)。
+`run_once(session, x_client, formatter, me_user_id, max_drafts=None) -> {"reply_suggestions": replies, "quote_suggestions": quotes}` が1監視サイクル。流れは **「メンション個別処理 → 候補収集 → 1回のバッチAI選定 → Draft化」**:
 
-`budget`(手動1回実行で `max_drafts` を渡せばその回限りの上限、未指定は `cfg.max_drafts_per_run`)を**全ソース横断の総生成数バジェット**として共有。各ソースは下表の順で、`budget > 0` かつ対応トグルが ON のときだけ呼ばれ、生成数を `budget` から減算する(先着順・優先度固定)。
-
-| 順 | トグル | 関数 | 生成物 | 対象抽出 | カーソル stream |
-|---|---|---|---|---|---|
-| 1 | `mentions_enabled` | `poll_mentions` | reply | me_user_id 宛 | `"mentions"` |
-| 2 | `manual_targets_enabled` | `poll_targets` | reply | `active & user_id!=None & kind==MANUAL` | `target:<user_id>` |
-| 3 | `manual_targets_enabled` | `poll_lists` | reply | `active & kind==LIST & list_id!=None` | `target:<member_uid>` |
-| 4 | `keyword_search_enabled` | `poll_genre` | reply | `active & kind==GENRE & keyword!=None` | `genre:<keyword>` |
-| 5 | `following_enabled` | `poll_following` | reply | (自分のフォロー直接巡回) | `follow:<uid>` |
+1. **メンション(`poll_mentions`、トグル `mentions_enabled`・既定OFF=手動で返す方針)**: 従来通り `MonitorCursor`(stream=`"mentions"`)の `since_id` で重複を防ぎ、1件ずつ `create_reply_draft` で返信案を作る(自分宛は引用RTしないので `quote_suggestions` には乗らない)。`_cap_oldest(tweets, limit)` は超過時に **id 昇順(古い順)**で先頭 `limit` 件だけ残し、カーソルを最新まで飛ばさないため新着は次サイクルで再取得される。
+2. **候補収集(`collect_engage_candidates`)**: 全有効ソース(手動MANUAL/リストLIST=トグル `manual_targets_enabled` が両方を支配、ジャンルGENRE=`keyword_search_enabled`、フォロー中=`following_enabled`)から**直近24時間(`TARGET_MAX_AGE_HOURS=24`)の本人オリジナル投稿**を集める。**since_id カーソルは使わない**(24時間窓で毎回取り直す)。除外は3段: (a)**リポスト除外(`_drop_reposts`)**=正規化辞書の `is_repost`(twitterapi.io は `retweeted_tweet`/`quoted_tweet` の有無、公式API は `referenced_tweets` の type=retweeted/quoted)＋後方互換の本文 `RT @` 始まり、(b)**既に同じ tweet を対象にした Draft があれば状態問わず除外**(REJECTED 含む=却下済みへの再生成をしない・乱造防止と重複防止を兼ねる)、(c)ソース横断の tweet_id 重複排除。候補は新しい順(id降順)に `SELECT_MAX_CANDIDATES=120` 件まで(LLM入力の安全弁)。候補には `like_count`/`retweet_count`(twitterapi.io の `_norm` が保持)も載せ、伸び始め判断の材料にする。
+3. **バッチAI選定(`formatter.select_engagements`)**: 候補一覧を1回のLLM呼び出し(JSONスキーマ強制)に渡し、「どの投稿に絡むか(**同一アカウントは原則1件・最大2件**=分散)」「reply / quote のどちらか(迷えば reply)」「本文(140字厳守)」「選定理由」までまとめて生成する。コード側でも検証(候補に無いID破棄・140字超破棄・kind正規化・同一アカウント3件目以降破棄・`max_n`=残バジェットで打ち切り)。
+4. **Draft化(`service.create_engage_draft_from_text`)**: 本文は生成済みなので**LLMを呼ばずに** `status=DRAFT` の下書きを作る。選定理由は `source_text` に `[AI選定理由] ...` として保持(Inboxの承認判断材料)。型を変えたいときは従来通り Inbox の切替ボタン=`recast_engage_draft`。
 
 重要な不変条件:
-- ソース2・3は **同一トグル `manual_targets_enabled`** が両方を支配(LIST 専用トグルはない)。
-- **`kind==FOLLOWING` の `EngageTarget` 行はどの poll でも読まれない**(`poll_following` は `get_following` で自分のフォローを直接巡回。Enum とテーブルの不一致=ハマりどころ)。
-- LIST は巡回ごとに `get_list_members(max_total=LIST_MEMBERS_MAX=500)` でメンバーを**毎回取り直す**ため、X リスト側の増減が次サイクルで自動反映される。`target:<uid>` カーソルは MANUAL とキー空間を共有する点に注意。
-- 定数: `FOLLOWING_MAX_ACCOUNTS=20`、`LIST_MEMBERS_MAX=500`。
+- 投稿はせず未承認下書き(`status=DRAFT`)を生成するだけ(自動投稿しない)。
+- **`kind==FOLLOWING` の `EngageTarget` 行はどのソースでも読まれない**(フォロー中は `get_following` で自分のフォローを直接巡回。Enum とテーブルの不一致=ハマりどころ)。
+- LIST は収集ごとに `get_list_members(max_total=LIST_MEMBERS_MAX=500)` でメンバーを**毎回取り直す**ため、X リスト側の増減が次サイクルで自動反映される。
+- 定数: `FOLLOWING_MAX_ACCOUNTS=20`、`LIST_MEMBERS_MAX=500`、`TARGET_MAX_AGE_HOURS=24`、`SELECT_MAX_CANDIDATES=120`。
 - `auto_monitor_enabled` / `auto_post_enabled` は `monitor.run_once` 内では参照されない(デーモン側のティックゲート)。
-
-`_cap_oldest(tweets, limit)`: 超過時は **id 昇順(古い順)**で先頭 `limit` 件だけ残す。古い分だけ処理してカーソルを最新まで飛ばさないため、予算超過時も新着は消えず次サイクルで再取得される。
+- 対象ルール(本人オリジナルのみ等)は memory `xagent-monitor-targeting-rules` に恒久記録。
+- 生成数バジェット(`max_drafts_per_run`、手動1回実行は `max_drafts` でその回限りの上限)はメンションとバッチ選定で共有する総生成数上限。
 
 ### 最適時間スロット(`scheduler.py`)
 
@@ -832,8 +828,10 @@ SQLite `xagent.db`(`DB_PATH` 既定)。容量上限 `MAX_DB_BYTES`(既定2GB)超
 
 | 変数名 | 既定 | 意味 |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | None | Claude(整形エンジン)APIキー |
-| `CLAUDE_MODEL` | `claude-sonnet-4-6` | 整形に使うモデル |
+| `ANTHROPIC_API_KEY` | None | **未参照**(旧API直叩き時代の名残。CLI実行時の env からは除去される) |
+| `CLAUDE_MODEL` | `claude-opus-4-8` | 整形に使うモデル(Claude Code CLI に `--model` で渡す) |
+| `CLAUDE_CLI_PATH` | None | `claude` コマンドのパス。空なら PATH → `~/.local/bin/claude` の順で解決 |
+| `CLAUDE_CLI_TIMEOUT_SECONDS` | 240 | CLI 1回の実行タイムアウト(秒)。フロントの fetch 既定(約300秒)内に収める |
 | `X_API_KEY` / `X_API_SECRET` | None | X API OAuth1.0a(書込用) |
 | `X_ACCESS_TOKEN` / `X_ACCESS_TOKEN_SECRET` | None | OAuth1.0a アクセストークン(メディアアップロード用 v1.1 にも必須) |
 | `X_BEARER_TOKEN` | None | X API Bearer(読取用) |
@@ -857,7 +855,7 @@ SQLite `xagent.db`(`DB_PATH` 既定)。容量上限 `MAX_DB_BYTES`(既定2GB)超
 
 `pyproject.toml`(パッケージ名 `xagent` / version `0.1.0` / `requires-python>=3.11`)。正は `pyproject.toml`、`requirements.txt` はミラー。
 
-主要依存: `fastapi>=0.115`、`uvicorn>=0.30`(**`[standard]` を意図的に付けない**=Python 3.14 での uvloop/httptools ビルド回避)、`pydantic>=2.7`、`pydantic-settings>=2.3`、`sqlmodel>=0.0.21`、`anthropic>=0.40`、`tweepy>=4.14`、`APScheduler>=3.10`、`httpx>=0.27`、`python-multipart>=0.0.9`、`typer>=0.12`。
+主要依存: `fastapi>=0.115`、`uvicorn>=0.30`(**`[standard]` を意図的に付けない**=Python 3.14 での uvloop/httptools ビルド回避)、`pydantic>=2.7`、`pydantic-settings>=2.3`、`sqlmodel>=0.0.21`、`tweepy>=4.14`、`APScheduler>=3.10`、`httpx>=0.27`、`python-multipart>=0.0.9`、`typer>=0.12`。`anthropic` SDK は不使用(LLM は Claude Code CLI のヘッドレス使い捨てセッション=`xagent/claude_cli.py` 経由・subscription課金。`--bare` は OAuth が読めなくなるため使わない)。
 
 extras: `dev`=`pytest>=8`、`mcp`=`mcp>=1.2`。エントリポイント: `xagent`→`xagent.cli:main`、`xagent-mcp`→`xagent.mcp_server:main`。
 

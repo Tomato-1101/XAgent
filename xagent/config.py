@@ -17,9 +17,12 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    # --- Claude (整形エンジン) ---
-    anthropic_api_key: str | None = None
-    claude_model: str = "claude-sonnet-4-6"  # 整形は速度重視。必要に応じ opus に変更可
+    # --- Claude (整形エンジン: Claude Code CLI のヘッドレス使い捨てセッション) ---
+    # 課金はサブスクリプション(OAuth)。ANTHROPIC_API_KEY は使わない(あれば実行時に除去)。
+    anthropic_api_key: str | None = None  # 旧API直叩き時代の名残。現在は未参照(.env互換のため残置)
+    claude_model: str = "claude-opus-4-8"
+    claude_cli_path: str | None = None  # 未設定なら which("claude") → ~/.local/bin/claude
+    claude_cli_timeout_seconds: int = 240  # フロントの fetch 既定(~300s)内に収める
 
     # --- X API (OAuth1.0a: 投稿/書込, Bearer: 読取) ---
     x_api_key: str | None = None

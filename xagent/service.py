@@ -265,6 +265,40 @@ def recast_engage_draft(
     return _finalize_draft(session, formatter, draft, note)
 
 
+def create_engage_draft_from_text(
+    session: Session,
+    kind: DraftKind,
+    target_tweet_id: str,
+    body_text: str,
+    target_text: str = "",
+    target_handle: str | None = None,
+    target_created_at: datetime | None = None,
+    reason: str = "",
+) -> Draft:
+    """AIのバッチ選定(formatter.select_engagements)で本文まで生成済みの絡み案をDraft化する。
+
+    本文は確定済みなのでLLMは呼ばない(二重生成防止)。選定理由は source_text に保持し、
+    Inboxで人間が承認判断する材料にする。
+    """
+    if kind not in (DraftKind.REPLY, DraftKind.QUOTE):
+        raise PolicyViolation("絡み案はリプライか引用RTのみ作成できます。")
+    draft = Draft(
+        kind=kind,
+        status=DraftStatus.DRAFT,
+        source_text=f"[AI選定理由] {reason}" if reason else "",
+        segments_json=json.dumps([body_text], ensure_ascii=False),
+        target_tweet_id=target_tweet_id,
+        target_handle=target_handle,
+        target_text=target_text,  # 元ポスト本文を表示用に保持(人間が承認判断できるように)
+        target_created_at=to_naive_utc(target_created_at),
+    )
+    session.add(draft)
+    session.commit()
+    session.refresh(draft)
+    maintenance.enforce_db_capacity(session)
+    return draft
+
+
 def _compose_command_segments(
     session: Session,
     formatter: Formatter,

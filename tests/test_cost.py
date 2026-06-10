@@ -8,9 +8,9 @@ from xagent.models import CostKind
 
 
 def test_llm_cost_usd_computation():
-    # 入力100万tok=$3, 出力100万tok=$15
-    assert cost.llm_cost_usd(1_000_000, 0) == 3.0
-    assert cost.llm_cost_usd(0, 1_000_000) == 15.0
+    # claude-opus-4-8: 入力100万tok=$5, 出力100万tok=$25
+    assert cost.llm_cost_usd(1_000_000, 0) == 5.0
+    assert cost.llm_cost_usd(0, 1_000_000) == 25.0
     assert cost.llm_cost_usd(0, 0) == 0.0
 
 
@@ -42,14 +42,14 @@ def test_analytics_splits_x_and_claude(session):
     """X API(WRITE/READ/TL) と Claude(LLM) を分け、合計も返す。"""
     cost.log_cost(session, CostKind.WRITE, units=2, note="post")   # X: $0.02
     cost.log_cost(session, CostKind.READ, units=1, note="read")    # X: $0.005
-    cost.log_llm_cost(session, 1_000_000, 0, note="format")        # Claude: $3.0
+    cost.log_llm_cost(session, 1_000_000, 0, note="format")        # Claude: $5.0
     session.commit()
 
     res = cost_route(session=session)
 
     assert res["x_api"]["cost_usd"] == 0.025
-    assert res["claude_api"]["cost_usd"] == 3.0
-    assert res["total_usd"] == 3.025
+    assert res["claude_api"]["cost_usd"] == 5.0
+    assert res["total_usd"] == 5.025
     # 内訳のキー
     assert set(res["x_api"]["by_kind"].keys()) == {"write", "read"}
     assert set(res["claude_api"]["by_kind"].keys()) == {"llm"}

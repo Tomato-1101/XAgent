@@ -1,7 +1,9 @@
-"""受信監視。メンション/自分宛リプライと、絡み対象(有名人等)の新規投稿をポーリングし、
-返信案(絡み先へのリプライを含む)を「下書き(未承認)」として生成する。承認は人間が行う。
+"""受信監視。メンション/自分宛リプライと、絡み対象(有名人等)の直近24時間の投稿を収集し、
+AIのバッチ判断で「絡む価値が高い投稿」を分散選定して下書き(未承認)を生成する。承認は人間が行う。
 
-ストリーム不可のため定期ポーリング。MonitorCursor で since_id を管理し重複を防ぐ。
+メンションは MonitorCursor(since_id) で重複を防ぐ。絡み案は since_id を使わず24時間窓で
+毎回取り直し、「同じ tweet を対象にした Draft が既にあれば(状態問わず)再生成しない」ことで
+重複と乱造(却下済みへの再生成)を防ぐ。
 """
 
 from __future__ import annotations
@@ -10,14 +12,26 @@ from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, select
 
+from . import templates as templates_mod
+from .cost import bill_formatter_usage
 from .formatter import Formatter
-from .models import EngageTarget, MonitorCursor, MonitorSettings, TargetKind
-from .service import create_quote_draft, create_reply_draft, to_naive_utc
+from .models import (
+    Draft,
+    DraftKind,
+    EngageTarget,
+    MonitorCursor,
+    MonitorSettings,
+    TargetKind,
+    TemplateKind,
+)
+from .service import create_engage_draft_from_text, create_reply_draft, to_naive_utc
+from .style import active_style_guide
 from .x_client import XClient
 
 FOLLOWING_MAX_ACCOUNTS = 20  # フォロー中巡回の1ティック上限(コスト抑制)
 LIST_MEMBERS_MAX = 500       # リスト連携で展開するメンバー数の上限
-TARGET_MAX_AGE_DAYS = 3      # これより古い投稿にはリプ案を作らない(古いリプは無意味・乱造防止)
+TARGET_MAX_AGE_HOURS = 24    # 「今から24時間前まで」の投稿だけ絡み候補にする(古いリプは無意味)
+SELECT_MAX_CANDIDATES = 120  # AIバッチ選定に渡す候補数の安全弁(新しい順に残す)
 
 
 def get_monitor_settings(session: Session) -> MonitorSettings:
@@ -80,15 +94,15 @@ def _cap_oldest(tweets: list[dict], limit: int | None) -> list[dict]:
 
 
 def _within_age(
-    tweets: list[dict], max_age_days: int = TARGET_MAX_AGE_DAYS, now: datetime | None = None
+    tweets: list[dict], max_age_hours: int = TARGET_MAX_AGE_HOURS, now: datetime | None = None
 ) -> list[dict]:
-    """投稿日時が max_age_days 以内のツイートだけに絞る(古い投稿への無意味なリプ案を防ぐ)。
+    """投稿日時が max_age_hours 以内のツイートだけに絞る(古い投稿への無意味なリプ案を防ぐ)。
 
     created_at(tweepy の aware datetime)を naive UTC に正規化して比較する。created_at が
     取れないものは判定不能として通す(実データは created_at を必ず持つ。テスト互換のため)。
     """
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
-    cutoff = now - timedelta(days=max_age_days)
+    cutoff = now - timedelta(hours=max_age_hours)
     out = []
     for t in tweets:
         dt = to_naive_utc(t.get("created_at"))
@@ -108,33 +122,6 @@ def _drop_reposts(tweets: list[dict]) -> list[dict]:
         t for t in tweets
         if not t.get("is_repost") and not str(t.get("text", "")).startswith("RT @")
     ]
-
-
-def _emit_engage_drafts(
-    session: Session,
-    formatter: Formatter,
-    t: dict,
-    handle: str | None,
-) -> tuple[int, int]:
-    """絡み対象の1投稿に対し、AIが「リプライ」と「引用RT」のどちらが効果的かを判断し、
-    良い方の案を1件だけ下書きする。(返信数, 引用数) を返す(必ず片方は0)。
-
-    以前は1投稿につき返信案・引用案を両方作っていたが、AI判断で1案に絞ることで生成コストと
-    下書き件数を半減する。型を変えたいときは Inbox の手動切替([引用RTで送る]/[手動で返信に
-    切替])で人間が後から作り直せる(service.recast_engage_draft)。
-    """
-    text = t.get("text", "")
-    ca = t.get("created_at")
-    kind = formatter.decide_engage_type(text, handle or "")
-    if kind == "quote":
-        create_quote_draft(
-            session, formatter, t["id"], text, target_handle=handle, target_created_at=ca
-        )
-        return 0, 1
-    create_reply_draft(
-        session, formatter, t["id"], text, target_handle=handle, target_created_at=ca
-    )
-    return 1, 0
 
 
 def poll_mentions(
@@ -165,192 +152,100 @@ def poll_mentions(
     return created, 0
 
 
-def poll_targets(
-    session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
-) -> tuple[int, int]:
-    """手動追加(MANUAL・user_id付き)の新規投稿→AI判断で返信案か引用案を1件。limit は全対象で共有。
+def _candidate(t: dict, handle: str | None) -> dict:
+    """正規化ツイート辞書を、AIバッチ選定に渡す候補の形に変換する。"""
+    return {
+        "tweet_id": str(t.get("id", "")),
+        "handle": handle or t.get("author_handle") or t.get("author_id"),
+        "text": t.get("text", ""),
+        "created_at": t.get("created_at"),
+        "like_count": t.get("like_count", 0),
+        "retweet_count": t.get("retweet_count", 0),
+    }
 
-    (返信数, 引用数) を返す。1投稿につきAIが良い方を選んで1件だけ下書きする(_emit_engage_drafts)。
+
+def collect_engage_candidates(
+    session: Session, x_client: XClient, me_user_id: str,
+    cfg: MonitorSettings | None = None,
+) -> list[dict]:
+    """全有効ソース(手動対象/リスト/ジャンル/フォロー中)から直近24時間の本人オリジナル投稿を
+    集め、AIバッチ選定の候補一覧を返す。
+
+    since_id カーソルは使わない(24時間窓で毎回取り直す)。重複防止は
+    (1)既に同じ tweet を対象にした Draft があれば状態問わず除外(却下済みへの再生成もしない)、
+    (2)ソース横断の tweet_id 重複排除。候補は新しい順に SELECT_MAX_CANDIDATES 件まで。
     """
-    targets = session.exec(
-        select(EngageTarget).where(
-            EngageTarget.active == True,  # noqa: E712
-            EngageTarget.user_id != None,  # noqa: E711
-            EngageTarget.kind == TargetKind.MANUAL,
-        )
-    ).all()
-    created = 0
-    replies = 0
-    quotes = 0
-    for target in targets:
-        if limit is not None and created >= limit:
-            break
-        remaining = None if limit is None else limit - created
-        cur = _get_cursor(session, f"target:{target.user_id}")
-        tweets = _cap_oldest(
-            _within_age(
-                _drop_reposts(
-                    x_client.get_user_timeline(target.user_id, since_id=cur.last_seen_id)
-                )
-            ),
-            remaining,
-        )
-        processed = []
-        for t in tweets:
-            if limit is not None and created >= limit:
-                break
-            r, q = _emit_engage_drafts(session, formatter, t, target.handle)
-            created += r + q
-            replies += r
-            quotes += q
-            processed.append(t["id"])
-        new_max = _max_id(processed)
-        if new_max:
-            cur.last_seen_id = new_max
-            session.add(cur)
-            session.commit()
-    return replies, quotes
-
-
-def poll_lists(
-    session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
-) -> tuple[int, int]:
-    """Xリスト連携(kind=LIST)→リストの現メンバーを毎回展開し各人の新規投稿→AI判断で1件。
-
-    メンバーは巡回ごとに get_list_members で取り直すため、Xリスト側の増減が自動で反映される
-    (=リスト更新が絡む相手に連携)。limit は全対象で共有。(返信数, 引用数) を返す。
-    """
-    lists = session.exec(
-        select(EngageTarget).where(
-            EngageTarget.active == True,  # noqa: E712
-            EngageTarget.kind == TargetKind.LIST,
-            EngageTarget.list_id != None,  # noqa: E711
-        )
-    ).all()
-    created = 0
-    replies = 0
-    quotes = 0
-    for lt in lists:
-        if limit is not None and created >= limit:
-            break
-        members = x_client.get_list_members(lt.list_id, max_total=LIST_MEMBERS_MAX)
-        for m in members:
-            if limit is not None and created >= limit:
-                break
-            uid = m.get("id")
+    cfg = cfg or get_monitor_settings(session)
+    raw: list[tuple[dict, str | None]] = []
+    if cfg.manual_targets_enabled:
+        targets = session.exec(
+            select(EngageTarget).where(
+                EngageTarget.active == True,  # noqa: E712
+                EngageTarget.user_id != None,  # noqa: E711
+                EngageTarget.kind == TargetKind.MANUAL,
+            )
+        ).all()
+        for target in targets:
+            for t in _drop_reposts(x_client.get_user_timeline(target.user_id)):
+                raw.append((t, target.handle))
+        lists = session.exec(
+            select(EngageTarget).where(
+                EngageTarget.active == True,  # noqa: E712
+                EngageTarget.kind == TargetKind.LIST,
+                EngageTarget.list_id != None,  # noqa: E711
+            )
+        ).all()
+        for lt in lists:
+            for m in x_client.get_list_members(lt.list_id, max_total=LIST_MEMBERS_MAX):
+                uid = m.get("id")
+                if not uid:
+                    continue
+                for t in _drop_reposts(x_client.get_user_timeline(uid)):
+                    raw.append((t, m.get("username")))
+    if cfg.keyword_search_enabled:
+        genres = session.exec(
+            select(EngageTarget).where(
+                EngageTarget.active == True,  # noqa: E712
+                EngageTarget.kind == TargetKind.GENRE,
+                EngageTarget.keyword != None,  # noqa: E711
+            )
+        ).all()
+        for target in genres:
+            for t in _drop_reposts(x_client.search_recent(target.keyword)):
+                raw.append((t, None))
+    if cfg.following_enabled:
+        for user in x_client.get_following(me_user_id, max_total=FOLLOWING_MAX_ACCOUNTS):
+            uid = user.get("id")
             if not uid:
                 continue
-            remaining = None if limit is None else limit - created
-            cur = _get_cursor(session, f"target:{uid}")
-            tweets = _cap_oldest(
-                _within_age(
-                    _drop_reposts(x_client.get_user_timeline(uid, since_id=cur.last_seen_id))
-                ),
-                remaining,
-            )
-            processed = []
-            for t in tweets:
-                if limit is not None and created >= limit:
-                    break
-                r, q = _emit_engage_drafts(session, formatter, t, m.get("username"))
-                created += r + q
-                replies += r
-                quotes += q
-                processed.append(t["id"])
-            new_max = _max_id(processed)
-            if new_max:
-                cur.last_seen_id = new_max
-                session.add(cur)
-                session.commit()
-    return replies, quotes
+            for t in _drop_reposts(x_client.get_user_timeline(uid)):
+                raw.append((t, user.get("username")))
 
-
-def poll_genre(
-    session: Session, x_client: XClient, formatter: Formatter, limit: int | None = None
-) -> tuple[int, int]:
-    """ジャンル/キーワード探索(GENRE対象)→該当投稿にAI判断で返信案か引用案を1件。limit は全対象で共有。
-
-    (返信数, 引用数) を返す。1投稿につきAIが良い方を選んで1件だけ下書きする(_emit_engage_drafts)。
-    """
-    targets = session.exec(
-        select(EngageTarget).where(
-            EngageTarget.active == True,  # noqa: E712
-            EngageTarget.kind == TargetKind.GENRE,
-            EngageTarget.keyword != None,  # noqa: E711
-        )
-    ).all()
-    created = 0
-    replies = 0
-    quotes = 0
-    for target in targets:
-        if limit is not None and created >= limit:
-            break
-        remaining = None if limit is None else limit - created
-        cur = _get_cursor(session, f"genre:{target.keyword}")
-        tweets = _cap_oldest(
-            _within_age(
-                _drop_reposts(x_client.search_recent(target.keyword, since_id=cur.last_seen_id))
-            ),
-            remaining,
-        )
-        processed = []
-        for t in tweets:
-            if limit is not None and created >= limit:
-                break
-            r, q = _emit_engage_drafts(session, formatter, t, t.get("author_id"))
-            created += r + q
-            replies += r
-            quotes += q
-            processed.append(t["id"])
-        new_max = _max_id(processed)
-        if new_max:
-            cur.last_seen_id = new_max
-            session.add(cur)
-            session.commit()
-    return replies, quotes
-
-
-def poll_following(
-    session: Session, x_client: XClient, formatter: Formatter, me_user_id: str,
-    limit: int | None = None,
-) -> tuple[int, int]:
-    """フォロー中アカウントの新規投稿→AI判断で返信案か引用案を1件。limit は全対象で共有。
-
-    (返信数, 引用数) を返す。1投稿につきAIが良い方を選んで1件だけ下書きする(_emit_engage_drafts)。
-    """
-    following = x_client.get_following(me_user_id, max_total=FOLLOWING_MAX_ACCOUNTS)
-    created = 0
-    replies = 0
-    quotes = 0
-    for user in following:
-        if limit is not None and created >= limit:
-            break
-        uid = user.get("id")
-        if not uid:
+    existing = {
+        tid
+        for tid in session.exec(
+            select(Draft.target_tweet_id).where(Draft.target_tweet_id != None)  # noqa: E711
+        ).all()
+        if tid
+    }
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    cutoff = now - timedelta(hours=TARGET_MAX_AGE_HOURS)
+    seen: set[str] = set()
+    out: list[dict] = []
+    for t, handle in raw:
+        tid = str(t.get("id", ""))
+        if not tid or tid in seen or tid in existing:
             continue
-        remaining = None if limit is None else limit - created
-        cur = _get_cursor(session, f"follow:{uid}")
-        tweets = _cap_oldest(
-            _within_age(
-                _drop_reposts(x_client.get_user_timeline(uid, since_id=cur.last_seen_id))
-            ),
-            remaining,
-        )
-        processed = []
-        for t in tweets:
-            if limit is not None and created >= limit:
-                break
-            r, q = _emit_engage_drafts(session, formatter, t, user.get("username"))
-            created += r + q
-            replies += r
-            quotes += q
-            processed.append(t["id"])
-        new_max = _max_id(processed)
-        if new_max:
-            cur.last_seen_id = new_max
-            session.add(cur)
-            session.commit()
-    return replies, quotes
+        dt = to_naive_utc(t.get("created_at"))
+        if dt is not None and dt < cutoff:
+            continue
+        seen.add(tid)
+        out.append(_candidate(t, handle))
+    out.sort(
+        key=lambda c: int(c["tweet_id"]) if str(c["tweet_id"]).isdigit() else 0,
+        reverse=True,
+    )
+    return out[:SELECT_MAX_CANDIDATES]
 
 
 def run_once(
@@ -359,9 +254,11 @@ def run_once(
 ) -> dict:
     """1回分の監視サイクル。各ソースはトグル(MonitorSettings)で個別にオン/オフ。
 
-    総生成数バジェットを全ソースで共有し、一気に作りすぎてAPIを圧迫しないようにする
-    (使い切ったら以降のソースはスキップ)。手動の1回実行で件数を絞りたいときは max_drafts に
-    その回限りの上限を渡す(指定なしは設定値 max_drafts_per_run を使う)。
+    メンション返信は従来通り(since_idカーソル・自分宛は返信のみ)。絡み案は全有効ソースの
+    直近24時間の投稿をまとめて収集し、1回のAIバッチ判断で「どれに・reply/quoteどちらで・
+    どんな本文で」絡むかを分散選定する(従来の直列スキャンによる同一アカウント偏りの解消)。
+    総生成数はバジェットで上限管理(手動の1回実行は max_drafts でその回限りの上限を渡せる。
+    指定なしは設定値 max_drafts_per_run)。
     """
     cfg = get_monitor_settings(session)
     cap = cfg.max_drafts_per_run if max_drafts is None else max_drafts
@@ -369,23 +266,40 @@ def run_once(
     replies = 0
     quotes = 0
 
-    def _acc(pair):
-        nonlocal replies, quotes, budget
-        r, q = pair
-        replies += r
-        quotes += q
-        budget -= (r + q)
-
     if cfg.mentions_enabled and budget > 0:
-        _acc(poll_mentions(session, x_client, formatter, me_user_id, limit=budget))
-    if cfg.manual_targets_enabled and budget > 0:
-        _acc(poll_targets(session, x_client, formatter, limit=budget))
-    if cfg.manual_targets_enabled and budget > 0:
-        _acc(poll_lists(session, x_client, formatter, limit=budget))
-    if cfg.keyword_search_enabled and budget > 0:
-        _acc(poll_genre(session, x_client, formatter, limit=budget))
-    if cfg.following_enabled and budget > 0:
-        _acc(poll_following(session, x_client, formatter, me_user_id, limit=budget))
-    # 絡み対象(targets/lists/genre/following)は投稿ごとにAIが返信/引用RTの良い方を1件生成。
-    # メンションは自分宛のため返信のみ。総生成数はバジェット(max_drafts_per_run)で全ソース共有上限。
+        r, _ = poll_mentions(session, x_client, formatter, me_user_id, limit=budget)
+        replies += r
+        budget -= r
+
+    if budget > 0:
+        candidates = collect_engage_candidates(session, x_client, me_user_id, cfg)
+        if candidates:
+            selections = formatter.select_engagements(
+                candidates,
+                budget,
+                style_guide=active_style_guide(session),
+                reply_playbook=templates_mod.active_body(session, TemplateKind.REPLY),
+                quote_playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
+            )
+            for s in selections:
+                cand = s["candidate"]
+                kind = DraftKind.QUOTE if s["kind"] == "quote" else DraftKind.REPLY
+                create_engage_draft_from_text(
+                    session,
+                    kind,
+                    s["tweet_id"],
+                    s["text"],
+                    target_text=cand.get("text", ""),
+                    target_handle=cand.get("handle"),
+                    target_created_at=cand.get("created_at"),
+                    reason=s.get("reason", ""),
+                )
+                if kind == DraftKind.QUOTE:
+                    quotes += 1
+                else:
+                    replies += 1
+            # 選定0件でもバッチ判断のトークンは消費しているので記録する
+            note = "engage-select" if selections else "engage-select-empty"
+            bill_formatter_usage(session, formatter, note=note)
+            session.commit()
     return {"reply_suggestions": replies, "quote_suggestions": quotes}

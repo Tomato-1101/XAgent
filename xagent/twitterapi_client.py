@@ -90,6 +90,9 @@ class TwitterApiIoClient:
             "author_handle": author.get("userName"),
             "created_at": _parse_created_at(t.get("createdAt")),  # 元投稿の投稿時刻(表示・鮮度判断用)
             "is_repost": is_repost,
+            # AIのバッチ選定材料(伸び始めの投稿を優先するための指標)
+            "like_count": _as_int(t.get("likeCount")),
+            "retweet_count": _as_int(t.get("retweetCount")),
         }
 
     @staticmethod

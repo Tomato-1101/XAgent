@@ -33,7 +33,9 @@ class FakeFormatter:
     def __init__(self):
         self.playbooks = []          # 整形に渡された playbook を順に記録
         self.complete_return = None  # set すると complete() がこれを返す
-        self.engage_type_return = "reply"  # decide_engage_type の戻り(テストで切替)
+        self.engage_kind_return = "reply"  # select_engagements の既定の型(テストで切替)
+        self.select_calls = []       # select_engagements の呼び出し内容を記録(検証用)
+        self.select_return = None    # set すると select_engagements がこれを返す
 
     def format_post(
         self, source_text, style_guide="", allow_long=False,
@@ -63,8 +65,22 @@ class FakeFormatter:
         self.playbooks.append(playbook)
         return FormatResult([f"引用案: {target_text[:10]}"], folded=False)
 
-    def decide_engage_type(self, target_text, target_handle=""):
-        return self.engage_type_return
+    def select_engagements(self, candidates, max_n, style_guide="", examples=None,
+                           reply_playbook="", quote_playbook=""):
+        self.select_calls.append({
+            "candidates": list(candidates), "max_n": max_n,
+            "reply_playbook": reply_playbook, "quote_playbook": quote_playbook,
+        })
+        if self.select_return is not None:
+            return self.select_return
+        return [
+            {
+                "tweet_id": c["tweet_id"], "kind": self.engage_kind_return,
+                "text": f"絡み案: {str(c.get('text', ''))[:10]}",
+                "reason": "テスト選定", "candidate": c,
+            }
+            for c in candidates[:max_n]
+        ]
 
     def complete(self, system, user):
         if self.complete_return is not None:

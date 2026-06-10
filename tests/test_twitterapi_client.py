@@ -53,6 +53,8 @@ def test_get_tweet_normalizes_and_sends_key(monkeypatch):
         "author_handle": "someone",
         "created_at": tac._parse_created_at("Wed Oct 10 20:19:24 +0000 2018"),
         "is_repost": False,
+        "like_count": 0,
+        "retweet_count": 0,
     }
     assert seen["key"] == "test-key"
     assert seen["path"] == "/twitter/tweets"

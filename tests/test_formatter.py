@@ -54,3 +54,76 @@ def test_reply_includes_length_variation_hint():
     f.generate_reply("相手の投稿", "someone")
     assert "目安" in cap["system"]
     assert "幅を持たせる" in cap["system"]
+
+
+# --- select_engagements(バッチ選定)の検証ロジック ---------------------------
+
+def _selecting_formatter(data):
+    """_run_structured(LLM呼び出し)を差し替え、固定の選定結果を返す Formatter。"""
+    f = Formatter(complete=lambda s, u: "")
+    captured = {}
+
+    def fake(system, user, schema):
+        captured["system"] = system
+        captured["user"] = user
+        captured["schema"] = schema
+        return data
+
+    f._run_structured = fake
+    return f, captured
+
+
+_CANDS = [
+    {"tweet_id": "1", "handle": "a", "text": "投稿1"},
+    {"tweet_id": "2", "handle": "a", "text": "投稿2"},
+    {"tweet_id": "3", "handle": "a", "text": "投稿3"},
+    {"tweet_id": "4", "handle": "b", "text": "投稿4"},
+]
+
+
+def test_select_prompt_carries_candidates_and_dispersion_rule():
+    f, cap = _selecting_formatter({"selections": []})
+    f.select_engagements(_CANDS, 5, reply_playbook="リプ型R", quote_playbook="引用型Q")
+    assert "同一アカウントからは原則1件" in cap["system"]
+    assert "リプ型R" in cap["system"] and "引用型Q" in cap["system"]
+    assert "投稿4" in cap["user"]  # 候補一覧がuserプロンプトに乗る
+    assert cap["schema"] is Formatter._SELECT_SCHEMA
+
+
+def test_select_validates_results():
+    """不正ID破棄・140字超破棄・kind正規化・tweet_id重複は先勝ち。"""
+    f, _ = _selecting_formatter({"selections": [
+        {"tweet_id": "99", "kind": "reply", "text": "候補に無いID", "reason": "r"},
+        {"tweet_id": "1", "kind": "変な型", "text": "本文A", "reason": "r"},
+        {"tweet_id": "1", "kind": "quote", "text": "重複は捨てる", "reason": "r"},
+        {"tweet_id": "2", "kind": "reply", "text": "あ" * 141, "reason": "r"},
+        {"tweet_id": "4", "kind": "quote", "text": "本文B", "reason": "r"},
+    ]})
+    out = f.select_engagements(_CANDS, 10)
+    assert [(s["tweet_id"], s["kind"], s["text"]) for s in out] == [
+        ("1", "reply", "本文A"),  # kind不正はreplyに正規化
+        ("4", "quote", "本文B"),
+    ]
+    assert out[0]["candidate"] == _CANDS[0]  # 元候補dictを保持(Draft作成材料)
+
+
+def test_select_caps_same_author_at_two():
+    """同一アカウントは最大2件までコード側でも保証する(分散の再発防止)。"""
+    f, _ = _selecting_formatter({"selections": [
+        {"tweet_id": "1", "kind": "reply", "text": "A1", "reason": "r"},
+        {"tweet_id": "2", "kind": "reply", "text": "A2", "reason": "r"},
+        {"tweet_id": "3", "kind": "reply", "text": "A3は超過", "reason": "r"},
+        {"tweet_id": "4", "kind": "reply", "text": "B1", "reason": "r"},
+    ]})
+    out = f.select_engagements(_CANDS, 10)
+    assert [s["tweet_id"] for s in out] == ["1", "2", "4"]
+
+
+def test_select_respects_max_n():
+    f, _ = _selecting_formatter({"selections": [
+        {"tweet_id": "1", "kind": "reply", "text": "A1", "reason": "r"},
+        {"tweet_id": "4", "kind": "reply", "text": "B1", "reason": "r"},
+    ]})
+    assert len(f.select_engagements(_CANDS, 1)) == 1
+    assert f.select_engagements(_CANDS, 0) == []
+    assert f.select_engagements([], 5) == []
