@@ -16,10 +16,11 @@
 ## 常駐構成（→ memory `xagent-daemon-architecture` と概要doc §10）
 
 - バックエンドは **launchd `com.tomato.xagent`**（KeepAlive=true）が `127.0.0.1:8000` に常駐。API内蔵の `BackgroundScheduler` が `queue_tick`(60s, 予約発火・常時) と `monitor_tick`(180s, 絡み生成・`auto_monitor_enabled`既定OFFで内部制御) を回す。**ローカルでは別プロセスの `xagent daemon` は使わない。**
+- **リモートアクセス（スマホ）**: `tailscale serve --bg 8000` で tailnet 内に HTTPS 公開（`https://<mac名>.<tailnet>.ts.net` → localhost:8000。uvicorn は 127.0.0.1 のまま、インターネット非公開）。認証は `.env` の `API_TOKEN`（フロントはログイン画面で入力→`X-API-Token` 自動付与）。`/health` と `/media/files` のみ無認証。
 - **コード変更は自動反映（2026-06-09〜）**: plist の uvicorn に `--reload --reload-dir <repo>/xagent` を追加済みで、`xagent/` 配下の `.py` を保存した瞬間(約1秒)に worker が再起動し新コードを読む（手動 kickstart 不要）。保険として git `post-commit` フック（`githooks/post-commit`・`core.hooksPath=githooks`）がコミット毎に `kickstart -k`。**「コミットしたのに反映されない」は解消済み**（過去の不具合主因＝再起動忘れ。`lessons.md` 2026-06-09）。
-- **手動再起動が要るのは plist変更・依存追加・マイグレーションのときだけ**: plist定義の変更は kickstart では反映されない→ `launchctl bootout gui/$(id -u)/com.tomato.xagent` → `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tomato.xagent.plist`。プロセスだけ作り直すなら `launchctl kickstart -k "gui/$(id -u)/com.tomato.xagent"`。確認は `curl -s localhost:8000/health`。`kill` は launchd が即再生成するので使わない。`--reload` で reloader(親)+worker(子)の2プロセス構成。
+- **手動再起動が要るのは plist変更・依存追加・マイグレーション・.env変更のときだけ**（`.env` は `--reload-dir` の対象外。`API_TOKEN` 等を変えたら kickstart）: plist定義の変更は kickstart では反映されない→ `launchctl bootout gui/$(id -u)/com.tomato.xagent` → `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tomato.xagent.plist`。プロセスだけ作り直すなら `launchctl kickstart -k "gui/$(id -u)/com.tomato.xagent"`。確認は `curl -s localhost:8000/health`。`kill` は launchd が即再生成するので使わない。`--reload` で reloader(親)+worker(子)の2プロセス構成。
 - ログ: `~/Library/Logs/xagent.{out,err}.log`（uvicorn は `--log-level warning` なのでINFOは出ない）。
-- フロント: `cd frontend && npm run dev`。**ポートは固定 5180**（`vite.config.ts` の `strictPort:true`、Hermesの5173回避）。`http://localhost:5180/`。
+- フロント: 開発は `cd frontend && npm run dev`。**ポートは固定 5180**（`vite.config.ts` の `strictPort:true`、Hermesの5173回避）。`http://localhost:5180/`。**本番UIは `:8000` が `frontend/dist` を配信。フロントを変えたら `npm run build` しないと古いUIが配信され続ける**（API再起動は不要。UIのサイドバー下部に build 時刻表示あり）。
 
 ## 頻用コマンド
 

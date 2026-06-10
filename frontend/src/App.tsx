@@ -189,6 +189,16 @@ export default function App() {
             {online && sched && !sched.posting_enabled && (
               <Badge tone="amber">投稿 緊急停止中</Badge>
             )}
+            {/* 配信中の dist が古い(npm run build 忘れ)ことをスマホからも見抜けるように */}
+            <div className="text-zinc-600">
+              build:{" "}
+              {new Date(__BUILD_TIME__).toLocaleString("ja-JP", {
+                month: "numeric",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </div>
           </div>
         </aside>
 

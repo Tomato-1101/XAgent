@@ -52,7 +52,8 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 
 - **API プロセス(常駐)**: FastAPI (`xagent/api/main.py`) を uvicorn で起動。launchd (`com.tomato.xagent`、`KeepAlive` 有効)で `127.0.0.1:8000` に常駐する。
 - **内蔵 BackgroundScheduler**: API プロセスの `lifespan` 内で `init_db()` 後、`scheduler_enabled` が真なら APScheduler の `BackgroundScheduler(timezone="UTC")` を生成。別デーモンを起こさず同1プロセスで予約投稿(`queue_tick`、既定60秒)と絡み案生成(`monitor_tick`、既定180秒)を回す。**ただし monitor は `MonitorSettings.auto_monitor_enabled`(既定OFF)でゲートされ、OFFの間は即returnしてAPIを消費しない**(UIトグルでオンオフ。乱造防止のため既定OFF＝必要な時だけオンにする)。launchd 常駐構成では実際に回るのはこの内蔵スケジューラ。
-- **フロントエンド**: Vite + React + TypeScript の SPA (`frontend/`)。`vite.config.ts` で `port: 5180, strictPort: true` に固定(自動フォールバックしない)。
+- **フロントエンド**: Vite + React + TypeScript の SPA (`frontend/`)。開発時は `vite.config.ts` で `port: 5180, strictPort: true` に固定(自動フォールバックしない)。**本番UIは FastAPI が `frontend/dist` を同一オリジンで配信**(`GET /` が index.html を no-cache 返却、`/assets` を StaticFiles マウント。dist 未ビルドなら `/` は 503 で自己説明エラー)。
+- **リモートアクセス(スマホ)**: `tailscale serve --bg 8000` で tailnet 内に HTTPS プロキシ(`https://<mac名>.<tailnet>.ts.net` → `127.0.0.1:8000`)。uvicorn のバインドは `127.0.0.1` のまま変えない(インターネット非公開)。スマホは Tailscale アプリで接続し、ブラウザで上記 URL を開く。同一オリジン配信のため CORS 設定は不要。認証は `API_TOKEN`(下記 §7)。
 - **永続化**: SQLite (`xagent.db`、`DB_PATH` 既定)。SQLModel(SQLAlchemy 上)経由でアクセスし、生 SQL は原則不使用。
 
 ### 主要モジュール地図
@@ -395,7 +396,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 ## 7. APIエンドポイント一覧
 
-全ルータは `dependencies=[Depends(require_api_token)]` を APIRouter レベルで付与。`config.api_token` 設定時のみ `X-API-Token` ヘッダ必須(未設定なら認証なしで開放=既定)。ルート直下の `/health`・`/me`・`/status` は常に開放。
+全ルータは `dependencies=[Depends(require_api_token)]` を APIRouter レベルで付与。`config.api_token` 設定時のみ `X-API-Token` ヘッダ必須(未設定なら認証なしで開放=既定)。`/me`・`/status` もリモートアクセス対応で同じ保護下(アカウント名・運用状態を晒さない。`/status` はフロントのログイン時トークン検証も兼ねる)。常に開放なのは `/health`(launchd 死活確認・ログイン前の接続確認)と `/media/files` 静的配信(`<img>/<video>` タグはカスタムヘッダを送れないため。tailnet 内限定の露出として許容)のみ。
 
 - `GET /health` — `{status, version}`。
 - `GET /me` — 現在の投稿先アカウント(`get_me`、失敗時 `{id:null, username:null}`)。
@@ -533,12 +534,13 @@ drafts PATCH(segments/scheduled_at 独立)、monitor PUT(None 以外のフラグ
 
 ## 8. フロントエンド画面一覧
 
-Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯一のバックエンド通信層、`types.ts` が共有型。ビュー切替は URL ルータを使わずローカル state `view` の条件レンダリング(初期値 `"compose"`)。サイドバー下部に API 接続バッジ(10秒ごと ping)と「投稿先: @username」を表示。
+Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯一のバックエンド通信層、`types.ts` が共有型。ビュー切替は URL ルータを使わずローカル state `view` の条件レンダリング(初期値 `"compose"`)。サイドバー下部に API 接続バッジ(10秒ごと ping)・「投稿先: @username」・ビルド時刻(`__BUILD_TIME__`、`npm run build` 忘れ検知用)を表示。**lg 未満(スマホ)ではサイドバーがハンバーガー付きドロワーになる**(fixed+translate、backdrop タップで閉じる)。
 
 ### 共通規約
 
 - **時刻**: バックエンドは naive UTC ISO を返す。表示時は `+ "Z"` を付けて UTC 解釈し `toLocaleString("ja-JP")` 等で日本時間に変換。予約送信時は JST 壁時計値 `"YYYY-MM-DDTHH:MM"` に `:00+09:00` を付ける(`toScheduledAtISO`)。この naive UTC ⇔ JST 壁時計の変換規約がフロント全体の不変条件。
 - **エラー**: `api.req<T>()` は `!res.ok` で `body.detail` を含む `Error("ステータス: detail")` を throw。各画面が文字列化して表示。
+- **API base と認証**: `BASE` は `VITE_API_BASE` 明示指定 > dev(`npm run dev`)なら `http://localhost:8000` > 本番ビルド(同一オリジン配信)なら相対パス `""`。localStorage のトークン(`xagent_api_token`)を全リクエストに `X-API-Token` ヘッダで自動付与し、**401 を受けると `xagent:unauthorized` イベント → App がログイン画面(`views/Login.tsx`、`/status` でトークン検証)を表示**。サーバの `API_TOKEN` 未設定時は 401 が発生しないためログイン画面は一切出ない(ローカル運用の挙動不変)。
 - **二段階確認**: `useBlackoutGate` フックが制限帯の二段階確認ゲートを提供。`gate(onProceed, at?)` が `blackoutStatus` を引き、非ブロックなら即 `onProceed(false)`、ブロックなら stage1「警告を無視」→ stage2「最終確認」→ `onProceed(true)`。判定取得失敗時はそのまま実行(サーバ側ガードが最後の砦)。
 
 ### 各画面
@@ -725,6 +727,23 @@ npm run typecheck  # tsc --noEmit
 
 注意: README 本文には `# http://localhost:5173` とあるが**記述ミス**。実際の起動ポートは **5180**(`vite.config.ts` が `strictPort: true` で自動フォールバックしない)。
 
+**フロントのコードを変えたら `npm run build` を忘れない**: 本番UI(`:8000` および ts.net 経由)は `frontend/dist` を配信するため、build しないと古いUIが配信され続ける(API 側の再起動は不要。StaticFiles はリクエスト毎にディスクを読む)。サイドバー下部の `build: M/D HH:mm` 表示が古ければ build 忘れ。
+
+### リモートアクセス(Tailscale)
+
+```
+# 初回のみ: tailnet 内に HTTPS プロキシ(再起動後も永続)
+tailscale serve --bg 8000
+tailscale serve status   # 確認(https://<mac名>.<tailnet>.ts.net → 127.0.0.1:8000)
+tailscale serve reset    # 解除
+```
+
+- uvicorn は `127.0.0.1` バインドのまま(インターネット非公開。tailnet 内のみ到達可)。
+- 認証: `.env` に `API_TOKEN=<ランダム値>` を設定(`python3 -c "import secrets; print(secrets.token_urlsafe(32))"` で生成)→ `.env` は `--reload-dir` の対象外なので `launchctl kickstart -k` で反映。スマホ初回アクセス時にログイン画面でこの値を入力(localStorage 保存)。
+- 共同運営者のアクセス: 自分の tailnet にユーザーとして招待(無料プランは3ユーザーまで)が最も確実。代替はノード共有(共有先からの serve 到達性は実機検証が必要)。
+- HTTPS が必要な理由: iOS の clipboard API(Inbox の「コピーして元ポストを開く」)が secure context 必須。
+- 注意: Mac がスリープすると外から使えない。システム設定 →「電源アダプタ接続時はスリープさせない」を推奨。`/media/files` と `/health` は無認証(tailnet 内限定の露出として許容)。
+
 ### ログ
 
 | 種別 | パス |
@@ -734,8 +753,8 @@ npm run typecheck  # tsc --noEmit
 
 ### ポート
 
-- API: `127.0.0.1:8000`(ローカルのみ)
-- フロント: `127.0.0.1:5180`
+- API+本番UI: `127.0.0.1:8000`(ローカルバインド。リモートは tailscale serve の `https://<mac名>.<tailnet>.ts.net` 経由)
+- フロント開発サーバ: `127.0.0.1:5180`
 
 ### DB
 
@@ -829,7 +848,7 @@ SQLite `xagent.db`(`DB_PATH` 既定)。容量上限 `MAX_DB_BYTES`(既定2GB)超
 | `SCHEDULER_ENABLED` | true | false で予約キューの自動処理を止める(手動投稿は可) |
 | `SCHEDULER_INTERVAL_SECONDS` | 60 | 予約キュー点検間隔(秒) |
 | `MONITOR_INTERVAL_SECONDS` | 180 | 絡み案自動生成の実行間隔(秒) |
-| `API_TOKEN` | None | 設定時に書込系で `X-API-Token` 必須。空ならローカル開放 |
+| `API_TOKEN` | None | 設定時に全ルータ+`/me` `/status` で `X-API-Token` 必須(開放は `/health` と `/media/files` のみ)。空ならローカル開放 |
 | `TIMEZONE` | `Asia/Tokyo` | 運用タイムゾーン |
 
 設定の二重制御: 投稿の緊急停止は `POSTING_ENABLED`、絡み案の自動生成のオンオフは `MonitorSettings.auto_monitor_enabled`(既定OFF・UIトグル)。1日上限は `MAX_POSTS_PER_DAY`(自然)と `HARD_CAP_POSTS_PER_DAY`(ハード)の二段。
