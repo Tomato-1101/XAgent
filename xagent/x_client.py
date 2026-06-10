@@ -105,13 +105,21 @@ class XClient:
         return cls(client, api_v1, read_backend=read_backend)
 
     # --- 読み取りルーティング(バックエンド優先 / 失敗時のみ公式へ) ---
-    def _read(self, backend_call, official_call, what: str):
-        """読み取りは twitterapi.io 優先。TwitterApiIoError のときだけ公式APIで読み直す。"""
+    def _read(self, backend_call, official_call, what: str, official_fallback: bool = True):
+        """読み取りは twitterapi.io 優先。TwitterApiIoError のときだけ公式APIで読み直す。
+
+        official_fallback=False は大量バルク読み取り(監視の候補収集)用: 公式APIは
+        wait_on_rate_limit=True でレート制限時に最大15分ブロックするため、失敗分は
+        空を返してスキップする(次サイクルの24時間窓で再取得される)。
+        """
         if self._read_backend is None:
             return official_call()
         try:
             return backend_call(self._read_backend)
         except TwitterApiIoError as e:
+            if not official_fallback:
+                logger.warning("twitterapi.io %s 失敗(公式フォールバック無効・スキップ): %s", what, e)
+                return []
             logger.warning("twitterapi.io %s 失敗→公式APIにフォールバック: %s", what, e)
             return official_call()
 
@@ -318,11 +326,14 @@ class XClient:
         )
         return _normalize_tweets(resp)
 
-    def get_user_timeline(self, user_id: str, since_id: str | None = None) -> list[dict]:
+    def get_user_timeline(
+        self, user_id: str, since_id: str | None = None, official_fallback: bool = True
+    ) -> list[dict]:
         return self._read(
             lambda b: b.get_user_timeline(user_id, since_id),
             lambda: self._official_get_user_timeline(user_id, since_id),
             "get_user_timeline",
+            official_fallback=official_fallback,
         )
 
     def _official_get_user_timeline(self, user_id: str, since_id: str | None = None) -> list[dict]:

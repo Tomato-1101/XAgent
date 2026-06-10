@@ -148,7 +148,7 @@ class FakeXClient:
     def get_mentions(self, user_id, since_id=None):
         return list(self._mentions)
 
-    def get_user_timeline(self, user_id, since_id=None):
+    def get_user_timeline(self, user_id, since_id=None, official_fallback=True):
         return list(self._timelines.get(user_id, []))
 
     def get_user_by_username(self, username):

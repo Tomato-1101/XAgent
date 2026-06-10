@@ -58,14 +58,14 @@ class TwitterApiIoClient:
     def _get(self, path: str, params: dict) -> dict:
         clean = {k: v for k, v in params.items() if v is not None}
         try:
-            # per-call client: XClientがリクエスト毎に生成されるためコネクションを持ち越さない。
-            with httpx.Client(
-                base_url=self._base_url, timeout=self._timeout,
-                headers={"X-API-Key": self._api_key},
-            ) as client:
-                resp = client.get(path, params=clean)
-                resp.raise_for_status()
-                data = resp.json()
+            data = self._get_once(path, clean)
+        except httpx.TimeoutException:
+            # last_tweets 等は重く偶発タイムアウトしやすい。1回だけ再試行して成功率を上げる
+            # (公式APIフォールバックはレート制限待ちで長時間ブロックするため、ここで粘る方が安い)。
+            try:
+                data = self._get_once(path, clean)
+            except httpx.HTTPError as e:
+                raise TwitterApiIoError(f"twitterapi.io {path} 失敗: {e}") from e
         except httpx.HTTPError as e:
             raise TwitterApiIoError(f"twitterapi.io {path} 失敗: {e}") from e
         except ValueError as e:  # JSONデコード失敗
@@ -75,6 +75,16 @@ class TwitterApiIoClient:
                 f"twitterapi.io {path} エラー: {data.get('message') or data.get('msg')}"
             )
         return data if isinstance(data, dict) else {}
+
+    def _get_once(self, path: str, clean_params: dict) -> dict:
+        # per-call client: XClientがリクエスト毎に生成されるためコネクションを持ち越さない。
+        with httpx.Client(
+            base_url=self._base_url, timeout=self._timeout,
+            headers={"X-API-Key": self._api_key},
+        ) as client:
+            resp = client.get(path, params=clean_params)
+            resp.raise_for_status()
+            return resp.json()
 
     # --- 正規化 ---
     @staticmethod

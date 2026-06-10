@@ -186,7 +186,9 @@ def collect_engage_candidates(
             )
         ).all()
         for target in targets:
-            for t in _drop_reposts(x_client.get_user_timeline(target.user_id)):
+            for t in _drop_reposts(
+                x_client.get_user_timeline(target.user_id, official_fallback=False)
+            ):
                 raw.append((t, target.handle))
         lists = session.exec(
             select(EngageTarget).where(
@@ -200,7 +202,9 @@ def collect_engage_candidates(
                 uid = m.get("id")
                 if not uid:
                     continue
-                for t in _drop_reposts(x_client.get_user_timeline(uid)):
+                for t in _drop_reposts(
+                    x_client.get_user_timeline(uid, official_fallback=False)
+                ):
                     raw.append((t, m.get("username")))
     if cfg.keyword_search_enabled:
         genres = session.exec(
@@ -218,7 +222,9 @@ def collect_engage_candidates(
             uid = user.get("id")
             if not uid:
                 continue
-            for t in _drop_reposts(x_client.get_user_timeline(uid)):
+            for t in _drop_reposts(
+                x_client.get_user_timeline(uid, official_fallback=False)
+            ):
                 raw.append((t, user.get("username")))
 
     existing = {

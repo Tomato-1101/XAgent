@@ -155,6 +155,12 @@ class _FakeBackend:
             "description": "", "profile_image_url": None, "followers_count": 7,
         }]
 
+    def get_user_timeline(self, user_id, since_id=None):
+        self.calls.append(("get_user_timeline", user_id, since_id))
+        if self.fail:
+            raise TwitterApiIoError("backend down")
+        return [{"id": "31", "text": "backendTL", "author_id": str(user_id)}]
+
 
 def test_read_uses_backend_when_present():
     backend = _FakeBackend()
@@ -175,6 +181,20 @@ def test_read_falls_back_to_official_on_backend_error():
 def test_no_backend_uses_official():
     x = XClient(_FakeOfficial())                 # read_backend=None
     assert x.get_tweet("1")["text"] == "公式本文"
+
+
+def test_user_timeline_no_official_fallback_skips_on_error():
+    """official_fallback=False ではバックエンド失敗時に公式へ落とさず空を返す。
+
+    監視の候補収集用: 公式APIは wait_on_rate_limit でレート制限時に最大15分ブロック
+    するため、バルク読み取りでは失敗メンバーをスキップして先に進む。
+    """
+    backend = _FakeBackend(fail=True)
+    x = XClient(_FakeOfficial(), read_backend=backend)
+    assert x.get_user_timeline("u1", official_fallback=False) == []
+    # 成功時は通常どおりバックエンドの結果を返す
+    ok = XClient(_FakeOfficial(), read_backend=_FakeBackend())
+    assert ok.get_user_timeline("u1", official_fallback=False)[0]["text"] == "backendTL"
 
 
 def test_writes_always_use_official_even_with_backend():

@@ -194,3 +194,27 @@ def test_list_members_normalize_and_paginate(monkeypatch):
     assert [m["username"] for m in out] == ["alice", "bob"]
     assert out[1]["description"] == ""          # description欠落→""
     assert out[1]["profile_image_url"] is None  # profilePicture欠落→None
+
+
+def test_get_retries_once_on_timeout(monkeypatch):
+    """偶発タイムアウトは1回だけ再試行する(公式フォールバックの長時間ブロックより安い)。"""
+    n = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        n["count"] += 1
+        if n["count"] == 1:
+            raise httpx.ReadTimeout("timed out")
+        return httpx.Response(200, json={"tweets": [_tweet(1)], "status": "success"})
+
+    c = _client_with(monkeypatch, handler)
+    assert c.get_tweet("1")["id"] == "1"
+    assert n["count"] == 2
+
+
+def test_get_raises_after_second_timeout(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out")
+
+    c = _client_with(monkeypatch, handler)
+    with pytest.raises(TwitterApiIoError):
+        c.get_tweet("1")
