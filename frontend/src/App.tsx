@@ -56,6 +56,8 @@ export default function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [sched, setSched] = useState<SchedulerStatus | null>(null);
   const [needLogin, setNeedLogin] = useState(false);
+  // lg未満のドロワー開閉(lg以上では常時表示なので無関係)
+  const [navOpen, setNavOpen] = useState(false);
 
   // サーバが API_TOKEN を設定しているときだけ 401→このイベントが飛ぶ(ローカル運用では出ない)。
   useEffect(() => {
@@ -99,8 +101,44 @@ export default function App() {
 
   return (
     <ToastProvider>
-      <div className="flex h-full">
-        <aside className="flex w-56 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/40 p-4">
+      <div className="flex h-full flex-col lg:flex-row">
+        {/* モバイル用ヘッダ(lg以上では非表示)。ハンバーガーでドロワーを開く */}
+        <header className="sticky top-0 z-40 flex shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-950/95 px-4 py-3 lg:hidden">
+          <button
+            onClick={() => setNavOpen(true)}
+            aria-label="メニューを開く"
+            className="flex h-9 w-9 flex-col items-center justify-center gap-1 rounded-md hover:bg-zinc-800"
+          >
+            <span className="h-0.5 w-5 rounded bg-zinc-300" />
+            <span className="h-0.5 w-5 rounded bg-zinc-300" />
+            <span className="h-0.5 w-5 rounded bg-zinc-300" />
+          </button>
+          <div className="text-base font-semibold tracking-tight">XAgent</div>
+          <div className="ml-auto">
+            {online === null ? (
+              <Badge tone="zinc">確認中</Badge>
+            ) : online ? (
+              <Badge tone="green">接続OK</Badge>
+            ) : (
+              <Badge tone="red">未接続</Badge>
+            )}
+          </div>
+        </header>
+
+        {navOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-black/60 lg:hidden"
+            onClick={() => setNavOpen(false)}
+          />
+        )}
+
+        <aside
+          className={
+            "fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col overflow-y-auto border-r border-zinc-800 " +
+            "bg-zinc-900 p-4 transition-transform lg:static lg:w-56 lg:translate-x-0 lg:bg-zinc-900/40 " +
+            (navOpen ? "translate-x-0" : "-translate-x-full")
+          }
+        >
           <div className="mb-6">
             <div className="text-lg font-semibold tracking-tight">XAgent</div>
             <div className="mt-1 text-xs text-zinc-500">半自動X運用ダッシュボード</div>
@@ -109,7 +147,10 @@ export default function App() {
             {NAV.map((n) => (
               <button
                 key={n.key}
-                onClick={() => setView(n.key)}
+                onClick={() => {
+                  setView(n.key);
+                  setNavOpen(false);
+                }}
                 className={
                   "rounded-md px-3 py-2 text-left text-sm transition-colors " +
                   (view === n.key ? "bg-sky-600/20 text-sky-300" : "text-zinc-300 hover:bg-zinc-800")
@@ -151,7 +192,7 @@ export default function App() {
           </div>
         </aside>
 
-        <main className="flex-1 overflow-y-auto p-8">
+        <main className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div className="mx-auto max-w-3xl">
             {view === "compose" && <Compose />}
             {view === "queue" && <Queue me={me} />}

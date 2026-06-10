@@ -47,7 +47,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastCtx.Provider value={push}>
       {children}
-      <div className="fixed bottom-4 right-4 z-[60] flex w-80 flex-col gap-2">
+      <div className="fixed bottom-4 right-4 z-[60] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2">
         {toasts.map((t) => (
           <div key={t.id} className={`rounded-lg border p-3 text-sm shadow-lg ${TONE_CLASS[t.tone]}`}>
             <div className="flex items-start justify-between gap-2">

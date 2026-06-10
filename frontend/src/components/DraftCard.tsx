@@ -179,7 +179,7 @@ export function DraftCard({
               </a>
             )}
           </div>
-          <div className="whitespace-pre-wrap text-zinc-400">{draft.target_text}</div>
+          <div className="whitespace-pre-wrap break-words text-zinc-400">{draft.target_text}</div>
         </div>
       )}
 
@@ -198,7 +198,7 @@ export function DraftCard({
               </a>
             )}
           </div>
-          <span className="whitespace-pre-wrap text-zinc-300">
+          <span className="whitespace-pre-wrap break-words text-zinc-300">
             {draft.target_text || "（自分の過去投稿）"}
           </span>
         </div>
@@ -240,13 +240,13 @@ export function DraftCard({
       ) : (
         <div className="space-y-2">
           {draft.segments.map((s, i) => (
-            <div key={i} className="rounded-md border border-zinc-800 bg-zinc-950 p-3 text-sm">
+            <div key={i} className="min-w-0 rounded-md border border-zinc-800 bg-zinc-950 p-3 text-sm">
               {draft.segments.length > 1 && (
                 <span className="mr-2 text-xs text-zinc-500">
                   {i + 1}/{draft.segments.length}
                 </span>
               )}
-              <span className="whitespace-pre-wrap">{s}</span>
+              <span className="whitespace-pre-wrap break-words">{s}</span>
               <span
                 className={
                   "ml-2 text-xs " + (charCount(s) > 140 ? "text-red-400" : "text-zinc-600")

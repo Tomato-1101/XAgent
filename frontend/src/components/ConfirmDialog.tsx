@@ -53,7 +53,8 @@ export function ConfirmDialog({
       role="dialog"
       aria-modal="true"
     >
-      <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl">
+      {/* max-h+scroll: スマホ縦画面で時間指定予約(SchedulePicker)等が画面外にあふれないように */}
+      <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-5 shadow-xl">
         <div className="text-base font-semibold text-zinc-100">{title}</div>
         {description && <div className="mt-1 text-sm text-zinc-400">{description}</div>}
         {children && <div className="mt-3">{children}</div>}
