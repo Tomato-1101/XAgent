@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -34,6 +35,24 @@ def _reply_length_hint() -> str:
         f"今回は{how}（目安 {lo}〜{hi} 字）。毎回同じ長さにせず幅を持たせる。"
         "ただし内容を最優先し、字数合わせのために不自然に伸ばしたり削ったりしない。"
     )
+
+
+# モデルが稀に本文末尾へ付ける自己解説トレーラー(例: "\n---\n**96字**／型：…で返しています。")を落とす。
+# プロンプトで「本文のみ」と指示しても Opus が間欠的に付けるため、生成後の保険として除去する。
+# markdown 水平線(--- 等)の後ろが「字数・型・構成」の自己言及のときだけ切り、通常の本文は壊さない。
+_HR_RE = re.compile(r"\n[ \t]*[-—–_*]{3,}[ \t]*(?:\n|$)")
+_META_TRAILER_RE = re.compile(r"\d+\s*字|型[：:]|構成|狙い")
+
+
+def _strip_reasoning_trailer(text: str) -> str:
+    m = _HR_RE.search(text)
+    if not m:
+        return text
+    head, tail = text[: m.start()], text[m.end() :]
+    if head.strip() and _META_TRAILER_RE.search(tail):
+        return head.rstrip()
+    return text
+
 
 CompleteFn = Callable[[str, str], str]
 
@@ -208,11 +227,11 @@ class Formatter:
 - 具体や知識は無理に足さない。素の共感・面白がり・一言ツッコミでよい(「あ、そうですよね」「これ面白い」「わかる」級)。短く本音っぽいほど伸びる。
 - {_reply_length_hint()}
 - 媚びすぎ・定型の褒めは避ける。が、賢く見せようと説明的・解説的になるのはもっと避ける。本人の口調を保つ。
-- 出力はリプライ本文のみ。
+- 出力はリプライ本文のみ。字数・型・狙いなどの自己解説や「---」区切りの注記を一切付けない。
 
 {_guide_with_playbook(playbook, style_guide, examples)}""".strip()
         user = f"相手(@{target_handle})の投稿:\n{target_text}"
-        text = self._complete(system, user).strip()
+        text = _strip_reasoning_trailer(self._complete(system, user).strip())
         return FormatResult([text], exceeds_fold(text), weighted_length(text))
 
     # --- 引用RT案 ---
@@ -230,11 +249,11 @@ class Formatter:
 - 必ず140字(日本語の字数)以内。1字も超えない。
 - 学びは必須でない。素直な反応＋自分の一言でよい(「これ面白い」「わかる」級)。賢く解説しようとして説明的になるより本音の短さが伸びる。
 - {_reply_length_hint()}
-- 本人の口調を保つ。出力は引用本文のみ。
+- 本人の口調を保つ。出力は引用本文のみ。字数・型・狙いなどの自己解説や「---」区切りの注記を一切付けない。
 
 {_guide_with_playbook(playbook, style_guide, examples)}""".strip()
         user = f"引用する相手(@{target_handle})の投稿:\n{target_text}"
-        text = self._complete(system, user).strip()
+        text = _strip_reasoning_trailer(self._complete(system, user).strip())
         return FormatResult([text], exceeds_fold(text), weighted_length(text))
 
     # --- 絡み候補のバッチ選定(分散・reply/quote判断・本文生成まで1回で行う) ---
