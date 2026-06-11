@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
@@ -10,7 +12,8 @@ from ...formatter import Formatter
 from ...guards import BlackoutViolation, PolicyViolation
 from ...models import DraftKind, DraftStatus
 from ...x_client import XClient, XClientError
-from ..deps import db_session, get_formatter, get_x_client, require_api_token
+from ..deps import db_session, get_formatter, get_session_factory, get_x_client, require_api_token
+from ..jobs import start_job
 from ..schemas import (
     DraftRead,
     PostNowRequest,
@@ -107,24 +110,31 @@ def restore(draft_id: int, session: Session = Depends(db_session)) -> DraftRead:
     return draft_to_read(d)
 
 
-@router.post("/{draft_id}/recast", response_model=DraftRead)
+@router.post("/{draft_id}/recast")
 def recast(
     draft_id: int,
     req: RecastRequest,
     session: Session = Depends(db_session),
     formatter: Formatter = Depends(get_formatter),
-) -> DraftRead:
+    session_factory: Callable[[], Session] = Depends(get_session_factory),
+) -> dict:
     """絡みの下書きをリプライ⇄引用RTに作り直す(本文を新しい型で再生成し kind を差し替え)。
 
     Inboxの[引用RTで送る]/[手動で返信に切替]から呼ばれる。未承認の REPLY/QUOTE のみ可。
+    本文のAI再生成に数十秒かかるため job_id を即返し、フロントが /jobs/{id} をポーリングする。
     """
-    d = _load(session, draft_id)
+    _load(session, draft_id)  # 404 だけは即返す
     to_kind = DraftKind.QUOTE if req.to == "quote" else DraftKind.REPLY
-    try:
-        service.recast_engage_draft(session, formatter, d, to_kind)
-    except PolicyViolation as e:
-        raise HTTPException(409, str(e))
-    return draft_to_read(d)
+
+    def _run() -> dict:
+        with session_factory() as s:
+            d = service.get_draft(s, draft_id)
+            if d is None:
+                raise PolicyViolation("下書きが見つかりません。")
+            service.recast_engage_draft(s, formatter, d, to_kind)
+            return draft_to_read(d).model_dump(mode="json")
+
+    return {"job_id": start_job(_run)}
 
 
 @router.post("/{draft_id}/queue", response_model=DraftRead)

@@ -48,11 +48,27 @@ export function mediaUrl(path: string): string {
   return `${BASE}/media/files/${name}`;
 }
 
+/** HTTPステータス付きエラー。接続自体の失敗(TypeError)と区別するために使う。 */
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    ...init,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      ...init,
+    });
+  } catch {
+    // fetch の TypeError(接続拒否・切断・タイムアウト)。素のメッセージは不親切なので変換。
+    throw new Error("サーバに接続できません(再起動中かネットワーク断)。少し待って再試行してください。");
+  }
   if (!res.ok) {
     // トークン不正/未入力。App がこのイベントを拾ってログイン画面を出す。
     if (res.status === 401) window.dispatchEvent(new Event("xagent:unauthorized"));
@@ -63,10 +79,44 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new Error(detail);
+    throw new ApiError(res.status, detail);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+interface JobStatus {
+  job_id: string;
+  status: "running" | "done" | "error";
+  result: unknown;
+  error: string | null;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 長時間のAI生成をジョブAPIで実行する。POST で job_id を受け取り /jobs/{id} を
+ * ポーリングして結果を返す(同期fetchだとブラウザの約300秒上限・CLIタイムアウト・
+ * サーバ再起動で「Failed to fetch」になるため)。ポーリング中の一時的な接続断は
+ * リトライ継続し、404(サーバ再起動でジョブ消滅)だけ中断として扱う。
+ */
+async function runJob<T>(path: string, init?: RequestInit): Promise<T> {
+  const { job_id } = await req<{ job_id: string }>(path, init);
+  for (;;) {
+    await sleep(2000);
+    let j: JobStatus;
+    try {
+      j = await req<JobStatus>(`/jobs/${job_id}`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        throw new Error("サーバが再起動したため生成が中断されました。もう一度実行してください。");
+      }
+      if (e instanceof ApiError) throw e; // 401 など。接続断(plain Error)のみ継続
+      continue;
+    }
+    if (j.status === "done") return j.result as T;
+    if (j.status === "error") throw new Error(j.error ?? "生成に失敗しました。");
+  }
 }
 
 export const api = {
@@ -147,9 +197,9 @@ export const api = {
     auto_template?: boolean;
   }) => req<Draft>("/compose/command", { method: "POST", body: JSON.stringify(payload) }),
 
-  // URLから引用案(引用RT)をAIに生成させる(Inboxの手動ボタン)
+  // URLから引用案(引用RT)をAIに生成させる(Inboxの手動ボタン)。ジョブ経由(数十秒〜数分)。
   quoteFromUrl: (url: string) =>
-    req<Draft>("/compose/quote-from-url", { method: "POST", body: JSON.stringify({ url }) }),
+    runJob<Draft>("/compose/quote-from-url", { method: "POST", body: JSON.stringify({ url }) }),
 
   uploadMedia: async (file: File): Promise<MediaItem> => {
     const fd = new FormData();
@@ -210,7 +260,7 @@ export const api = {
     }),
   // 絡みの下書きをリプライ⇄引用RTに作り直す(本文を再生成し型を切替)。Inboxの手動切替ボタン。
   recast: (id: number, to: "reply" | "quote") =>
-    req<Draft>(`/drafts/${id}/recast`, { method: "POST", body: JSON.stringify({ to }) }),
+    runJob<Draft>(`/drafts/${id}/recast`, { method: "POST", body: JSON.stringify({ to }) }),
 
   getStyle: () => req<{ guide_text: string; examples: string[] }>("/style"),
   putStyle: (guide_text: string) =>
@@ -232,8 +282,9 @@ export const api = {
   deleteTarget: (id: number) => req<{ deleted: number }>(`/targets/${id}`, { method: "DELETE" }),
 
   // limit を渡すとその回だけ生成数を上限管理(乱造防止)。未指定なら設定の max_drafts_per_run。
+  // 候補収集+バッチAI選定で数分〜15分かかるためジョブ経由。
   monitorRunOnce: (limit?: number) =>
-    req<{ reply_suggestions: number; quote_suggestions: number }>(
+    runJob<{ reply_suggestions: number; quote_suggestions: number }>(
       `/monitor/run-once${limit != null ? `?limit=${limit}` : ""}`,
       { method: "POST" },
     ),

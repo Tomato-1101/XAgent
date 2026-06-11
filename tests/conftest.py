@@ -5,8 +5,18 @@ from __future__ import annotations
 import pytest
 from sqlmodel import Session, SQLModel, create_engine
 
+from xagent.config import Settings
 from xagent.formatter import FormatResult
 from xagent.models import BlackoutSettings
+
+
+@pytest.fixture(autouse=True)
+def _no_api_token(monkeypatch):
+    """ローカル .env の API_TOKEN がテストへ漏れて全APIが401になるのを防ぐ。
+
+    認証そのもののテスト(test_spa_auth)は個別に get_settings を上書きする。
+    """
+    monkeypatch.setattr("xagent.api.deps.get_settings", lambda: Settings(_env_file=None))
 
 
 @pytest.fixture

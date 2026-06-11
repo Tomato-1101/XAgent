@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session
@@ -19,7 +21,14 @@ from ...text import (
     weighted_length,
 )
 from ...x_client import XClient
-from ..deps import db_session, get_formatter, get_x_client_optional, require_api_token
+from ..deps import (
+    db_session,
+    get_formatter,
+    get_session_factory,
+    get_x_client_optional,
+    require_api_token,
+)
+from ..jobs import start_job
 from ..schemas import (
     CommandRequest,
     ComposeRequest,
@@ -232,32 +241,36 @@ def command(
     return draft_to_read(draft)
 
 
-@router.post("/quote-from-url", response_model=DraftRead)
+@router.post("/quote-from-url")
 def quote_from_url(
     req: QuoteFromUrlRequest,
-    session: Session = Depends(db_session),
     formatter: Formatter = Depends(get_formatter),
     x_client: XClient | None = Depends(get_x_client_optional),
-) -> DraftRead:
+    session_factory: Callable[[], Session] = Depends(get_session_factory),
+) -> dict:
     """ツイートURLから引用案(引用RT)をAIに生成させる(Inboxの手動ボタン)。
 
     監視の自動生成と同じ create_quote_draft を使い、相手投稿本文からコメントをAI生成する
     (自分のコメントを添える引用は Compose の指令フローを使う)。
+    AI生成は数十秒〜数分かかるため同期では返さず、job_id を即返してフロントが
+    /jobs/{id} をポーリングする(ブラウザfetchの約300秒上限とCLIタイムアウト対策)。
     """
     ref = extract_tweet_ref(req.url)
     if ref is None:
         raise HTTPException(400, "ツイートURL(x.com/.../status/<id>)を入力してください。")
     tweet_id, handle, _url = ref
-    target_text, target_handle, target_created_at = _fetch_target(x_client, tweet_id)
-    try:
-        draft = service.create_quote_draft(
-            session,
-            formatter,
-            tweet_id,
-            target_text,
-            target_handle=handle or target_handle,
-            target_created_at=target_created_at,
-        )
-    except PolicyViolation as e:
-        raise HTTPException(400, str(e))
-    return draft_to_read(draft)
+
+    def _generate() -> dict:
+        target_text, target_handle, target_created_at = _fetch_target(x_client, tweet_id)
+        with session_factory() as session:
+            draft = service.create_quote_draft(
+                session,
+                formatter,
+                tweet_id,
+                target_text,
+                target_handle=handle or target_handle,
+                target_created_at=target_created_at,
+            )
+            return draft_to_read(draft).model_dump(mode="json")
+
+    return {"job_id": start_job(_generate)}

@@ -10,11 +10,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .. import __version__
 from ..config import get_settings
@@ -22,6 +23,7 @@ from ..db import init_db
 from ..media import media_dir
 from ..x_client import XClient, XClientError
 from .deps import db_session, get_x_client, require_api_token
+from .jobs import router as jobs_router
 from .routes import (
     analytics,
     compose,
@@ -84,6 +86,23 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="XAgent", version=__version__, lifespan=lifespan)
 
+
+async def _json_error_middleware(request: Request, call_next):
+    """未捕捉例外を CORS の内側で JSON 500 に変換する。
+
+    Starlette 既定では最外層の ServerErrorMiddleware がプレーン500を返し、CORSMiddleware を
+    通らないためクロスオリジン(vite dev :5180)では一律「TypeError: Failed to fetch」になる。
+    ここで先に JSON 化すると CORS ヘッダ付き 500 になり、フロントに日本語の detail が届く。
+    """
+    try:
+        return await call_next(request)
+    except Exception as e:
+        log.exception("未捕捉例外: %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": str(e) or "サーバ内部エラー"})
+
+
+# add_middleware は後に追加した方が外側になる。JSON化(内側)→ CORS(外側)の順に並べる。
+app.add_middleware(BaseHTTPMiddleware, dispatch=_json_error_middleware)
 app.add_middleware(
     CORSMiddleware,
     # ローカル開発用: localhost/127.0.0.1 の任意ポートを許可(ポート衝突でずれても動くように)
@@ -164,6 +183,7 @@ app.include_router(media.router)
 app.include_router(analytics.router)
 app.include_router(lists.router)
 app.include_router(templates.router)
+app.include_router(jobs_router)
 
 # 添付画像/動画のプレビュー配信(ローカル)。アップロードAPIは /media/upload、配信は /media/files。
 # 注: <img>/<video> タグはカスタムヘッダを送れないため、この静的配信だけは X-API-Token 保護の

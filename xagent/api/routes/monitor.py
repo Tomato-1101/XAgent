@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, Depends
 from sqlmodel import Session
 
@@ -12,7 +14,8 @@ from ... import monitor as monitor_mod
 from ...formatter import Formatter
 from ...models import MonitorSettings
 from ...x_client import XClient
-from ..deps import db_session, get_formatter, get_x_client, require_api_token
+from ..deps import db_session, get_formatter, get_session_factory, get_x_client, require_api_token
+from ..jobs import start_job
 from ..schemas import MonitorSettingsRequest
 
 router = APIRouter(prefix="/monitor", tags=["monitor"], dependencies=[Depends(require_api_token)])
@@ -21,13 +24,22 @@ router = APIRouter(prefix="/monitor", tags=["monitor"], dependencies=[Depends(re
 @router.post("/run-once")
 def run_once(
     limit: int | None = None,
-    session: Session = Depends(db_session),
     x_client: XClient = Depends(get_x_client),
     formatter: Formatter = Depends(get_formatter),
+    session_factory: Callable[[], Session] = Depends(get_session_factory),
 ) -> dict:
-    """監視を1サイクル実行。limit を渡すとその回だけ生成数をその件数までに絞る(乱造防止)。"""
-    me = x_client.get_me()
-    return monitor_mod.run_once(session, x_client, formatter, me["id"], max_drafts=limit)
+    """監視を1サイクル実行。limit を渡すとその回だけ生成数をその件数までに絞る(乱造防止)。
+
+    候補収集+バッチAI選定で数分〜15分かかるため job_id を即返し、フロントが
+    /jobs/{id} をポーリングする(同期だとブラウザfetchの約300秒上限で必ず切れる)。
+    """
+
+    def _run() -> dict:
+        me = x_client.get_me()
+        with session_factory() as session:
+            return monitor_mod.run_once(session, x_client, formatter, me["id"], max_drafts=limit)
+
+    return {"job_id": start_job(_run)}
 
 
 @router.get("/settings", response_model=MonitorSettings)

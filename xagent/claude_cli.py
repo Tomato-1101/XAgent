@@ -71,16 +71,25 @@ def run_claude(
     cwd = Path(os.path.expanduser(_NEUTRAL_CWD))
     cwd.mkdir(parents=True, exist_ok=True)
 
-    proc = subprocess.run(
-        cmd,
-        input=user,
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=str(cwd),
-        timeout=timeout or settings.claude_cli_timeout_seconds,
-    )
+    timeout_s = timeout or settings.claude_cli_timeout_seconds
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=user,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(cwd),
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"AI生成が{timeout_s}秒でタイムアウトしました。時間をおいて再試行してください。"
+        ) from None
     if proc.returncode != 0:
+        # SIGTERM/SIGKILL(143/-15/137/-9)はサーバ再起動(--reload/kickstart)に巻き込まれた合図
+        if proc.returncode in (143, -15, 137, -9):
+            raise RuntimeError("サーバ再起動により生成が中断されました。もう一度実行してください。")
         err = (proc.stderr or proc.stdout or "").strip()[:500]
         raise RuntimeError(f"claude CLI が失敗しました (exit={proc.returncode}): {err}")
     try:

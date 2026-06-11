@@ -1,9 +1,11 @@
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from xagent.api.deps import db_session, get_formatter, get_x_client
+from xagent.api.deps import db_session, get_formatter, get_session_factory, get_x_client
 from xagent.api.main import app
 from xagent.models import BlackoutSettings
 from tests.conftest import FakeFormatter, FakeXClient
@@ -27,12 +29,26 @@ def client():
             yield s
 
     app.dependency_overrides[db_session] = _session
+    app.dependency_overrides[get_session_factory] = lambda: (lambda: Session(engine))
     app.dependency_overrides[get_formatter] = lambda: FakeFormatter()
     app.dependency_overrides[get_x_client] = lambda: fx
     c = TestClient(app)
     c.fake_x = fx
     yield c
     app.dependency_overrides.clear()
+
+
+def wait_job(client, resp, timeout=5.0) -> dict:
+    """ジョブ開始レスポンス({job_id})から完了を待ち、最終のジョブ dict を返す。"""
+    assert resp.status_code == 200, resp.text
+    job_id = resp.json()["job_id"]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        j = client.get(f"/jobs/{job_id}").json()
+        if j["status"] != "running":
+            return j
+        time.sleep(0.02)
+    raise AssertionError("ジョブが時間内に完了しませんでした")
 
 
 def test_health(client):
@@ -58,23 +74,26 @@ def test_status_endpoint(client):
 
 
 def test_recast_endpoint_switches_kind(client):
-    """Inboxの型切替: 返信案を引用RT案へ作り直す(kindが切り替わる)。"""
+    """Inboxの型切替: 返信案を引用RT案へ作り直す(ジョブ経由でkindが切り替わる)。"""
     did = client.post(
         "/compose/command", json={"action": "reply", "text": "返信文", "target_tweet_id": "555"}
     ).json()["id"]
     assert client.get(f"/drafts/{did}").json()["kind"] == "reply"
-    r = client.post(f"/drafts/{did}/recast", json={"to": "quote"})
-    assert r.status_code == 200
-    assert r.json()["kind"] == "quote"
+    j = wait_job(client, client.post(f"/drafts/{did}/recast", json={"to": "quote"}))
+    assert j["status"] == "done"
+    assert j["result"]["kind"] == "quote"
+    assert client.get(f"/drafts/{did}").json()["kind"] == "quote"
 
 
-def test_recast_endpoint_409_on_approved(client):
-    """承認済み(DRAFT以外)は型を切り替えられず409。"""
+def test_recast_endpoint_error_on_approved(client):
+    """承認済み(DRAFT以外)は型を切り替えられずジョブがエラーで返る。"""
     did = client.post(
         "/compose/command", json={"action": "reply", "text": "返信文", "target_tweet_id": "555"}
     ).json()["id"]
     client.post(f"/drafts/{did}/approve")
-    assert client.post(f"/drafts/{did}/recast", json={"to": "quote"}).status_code == 409
+    j = wait_job(client, client.post(f"/drafts/{did}/recast", json={"to": "quote"}))
+    assert j["status"] == "error"
+    assert "未承認" in j["error"]
 
 
 def test_preview_endpoint(client):
@@ -336,11 +355,12 @@ def test_quote_from_url_ai_generates_quote(client):
     )
     app.dependency_overrides[get_x_client_optional] = lambda: fx
     try:
-        r = client.post(
-            "/compose/quote-from-url", json={"url": "https://x.com/famous/status/777"}
+        j = wait_job(
+            client,
+            client.post("/compose/quote-from-url", json={"url": "https://x.com/famous/status/777"}),
         )
-        assert r.status_code == 200
-        d = r.json()
+        assert j["status"] == "done"
+        d = j["result"]
         assert d["kind"] == "quote"
         assert d["target_tweet_id"] == "777"
         assert d["target_text"] == "引用元の本文"

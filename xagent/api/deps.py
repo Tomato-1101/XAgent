@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from fastapi import Header, HTTPException
 from sqlmodel import Session
@@ -30,6 +30,15 @@ def require_api_token(x_api_token: str | None = Header(default=None)) -> None:
 def db_session() -> Iterator[Session]:
     with Session(get_engine()) as session:
         yield session
+
+
+def get_session_factory() -> Callable[[], Session]:
+    """ジョブ(レスポンス後も走る別スレッド)用の Session ファクトリ。
+
+    db_session はリクエスト終了で閉じるためジョブ内では使えない。テストでは
+    dependency_overrides でインメモリ engine のファクトリに差し替える。
+    """
+    return lambda: Session(get_engine())
 
 
 def get_formatter() -> Formatter:

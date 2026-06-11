@@ -422,7 +422,17 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 | POST | `/compose/variations` | 言い回し違いN案。`raw=true` なら1件のみ | 使用 | 400 |
 | POST | `/compose/interpret` | 自由文の指令解析(下書きは作らないがコスト計上) | 使用 | — |
 | POST | `/compose/command` | 確認済み指令から下書き作成(quote/reply/post)。quote/reply は `target_tweet_id` 必須 | 使用 | 400 |
-| POST | `/compose/quote-from-url` | ツイートURLから引用案(引用RT)をAI生成(`create_quote_draft`)。Inboxの手動ボタン | 使用 | 400 |
+| POST | `/compose/quote-from-url` | ツイートURLから引用案(引用RT)をAI生成(`create_quote_draft`)。Inboxの手動ボタン。**ジョブ化: `{"job_id"}` を即返し結果は `GET /jobs/{id}`**(URL不正のみ同期400) | 使用 | 400 |
+
+### jobs(`/jobs`) — 長時間AI生成の非同期実行(2026-06-11〜)
+
+生成系(quote-from-url / monitor run-once / recast)は Claude CLI 待ちで数十秒〜15分かかり、同期のままだと**ブラウザ fetch の上限(Chrome 約300秒)・CLIタイムアウト(240秒)・worker 再起動(--reload/kickstart)**のどれかに当たって「TypeError: Failed to fetch」になっていた。これらは `{"job_id"}` を即返し、フロント(`api.ts` の `runJob`)が `GET /jobs/{job_id}` を2秒間隔でポーリングする。
+
+| メソッド | パス | 用途 | エラー |
+|---|---|---|---|
+| GET | `/jobs/{job_id}` | ジョブ状態 `{job_id, status: running\|done\|error, result, error}` | 404(再起動でジョブ消滅) |
+
+ジョブは**プロセス内メモリ保持**(`xagent/api/jobs.py`、完了10分後に掃除)。worker 再起動で消えるが、結果の実体(下書き)は DB に入るので永続化しない。フロントは 404 を「サーバが再起動したため生成が中断されました」と表示し、一時的な接続断はポーリング継続で吸収する。あわせて未捕捉例外は `main.py` のミドルウェアが **CORS ヘッダ付き JSON 500** に変換する(Starlette 既定のプレーン500は CORSMiddleware を通らず、vite dev :5180 のクロスオリジンでは一律 Failed to fetch に化けるため)。
 
 ### drafts(`/drafts`)
 
@@ -436,7 +446,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 | POST | `/drafts/{id}/reject` | 却下 | 404/409 |
 | POST | `/drafts/{id}/cancel` | 取消(予約は自動投稿もキャンセル、投稿済みは不可) | 404/409 |
 | POST | `/drafts/{id}/restore` | ゴミ箱から復元 | 404/409 |
-| POST | `/drafts/{id}/recast` | 絡みの型切替: リプライ⇄引用RTで本文再生成し `kind` 差替(`{"to":"reply"\|"quote"}`)。未承認のREPLY/QUOTEのみ | 404/409 |
+| POST | `/drafts/{id}/recast` | 絡みの型切替: リプライ⇄引用RTで本文再生成し `kind` 差替(`{"to":"reply"\|"quote"}`)。未承認のREPLY/QUOTEのみ。**ジョブ化: `{"job_id"}` を即返す**(404のみ同期。PolicyViolation はジョブの error として返る) | 404 |
 | POST | `/drafts/{id}/queue` | キューへ(最適/指定時刻) | 404/409 |
 | POST | `/drafts/{id}/post` | 即時投稿 | 404/409/423/502 |
 
@@ -464,7 +474,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 | メソッド | パス | 用途 |
 |---|---|---|
-| POST | `/monitor/run-once` | 監視を1サイクル実行(`run_once` の戻り)。`?limit=N` でその回だけ生成数を N 件までに絞る(乱造防止) |
+| POST | `/monitor/run-once` | 監視を1サイクル実行。`?limit=N` でその回だけ生成数を N 件までに絞る(乱造防止)。**ジョブ化: `{"job_id"}` を即返し `run_once` の戻りはジョブの result**(候補収集+バッチ選定で実測数分〜15分) |
 | GET | `/monitor/settings` | 監視設定取得 |
 | PUT | `/monitor/settings` | 監視設定更新(None 以外のフラグのみ部分更新) |
 
