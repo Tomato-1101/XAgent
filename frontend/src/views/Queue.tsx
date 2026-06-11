@@ -5,6 +5,7 @@ import { DraftCard, charCount } from "../components/DraftCard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SchedulePicker } from "../components/SchedulePicker";
 import { useBlackoutGate } from "../components/BlackoutGate";
+import { useAutoRefresh } from "../components/useAutoRefresh";
 import { useToast } from "../components/Toast";
 import type { Draft, DraftStatus, Me, RecommendedSlot, RecommendedTimes } from "../types";
 
@@ -128,6 +129,8 @@ export default function Queue({ me }: { me: Me | null }) {
   }, [status]);
 
   useEffect(reload, [status]);
+  // スマホでタブ復帰した時や予約発火後に手動リロードしなくても一覧が追従するように
+  useAutoRefresh(reload);
   useEffect(() => {
     api.recommendedTimes().then(setRec).catch(() => setRec(null));
   }, []);

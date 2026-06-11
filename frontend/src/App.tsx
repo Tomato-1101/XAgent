@@ -86,6 +86,35 @@ export default function App() {
     api.me().then(setMe).catch(() => setMe(null));
   }, [online]);
 
+  // 開きっぱなしのタブが古いJSを使い続けるのを防ぐ(スマホで生成APIの応答形式が
+  // 変わった際に旧UIが誤動作した事故の再発防止)。タブ復帰時+10分間隔で index.html を
+  // 再取得し、参照スクリプトのハッシュが変わっていたら自動でリロードして最新UIに乗り換える。
+  // dev(:5180)は vite が常に最新を配るので不要。
+  useEffect(() => {
+    if (import.meta.env.DEV) return;
+    const current = document.querySelector<HTMLScriptElement>('script[src*="/assets/"]')?.src;
+    if (!current) return;
+    let checking = false;
+    const check = async () => {
+      if (checking || document.hidden) return;
+      checking = true;
+      try {
+        const html = await (await fetch("/", { cache: "no-store" })).text();
+        const m = html.match(/src="([^"]*\/assets\/[^"]+\.js)"/);
+        if (m && !current.endsWith(m[1])) window.location.reload();
+      } catch {
+        /* オフライン・再起動中は無視(次回チェックで拾う) */
+      }
+      checking = false;
+    };
+    document.addEventListener("visibilitychange", check);
+    const t = setInterval(check, 600000);
+    return () => {
+      document.removeEventListener("visibilitychange", check);
+      clearInterval(t);
+    };
+  }, []);
+
   if (needLogin) {
     return (
       <Login

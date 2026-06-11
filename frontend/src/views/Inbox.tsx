@@ -5,6 +5,7 @@ import { DraftCard, charCount } from "../components/DraftCard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
 import { useBlackoutGate } from "../components/BlackoutGate";
+import { useAutoRefresh } from "../components/useAutoRefresh";
 import { AgentHint } from "../components/AgentHint";
 import type { AgentPhrase } from "../components/AgentHint";
 import type { Draft, Me } from "../types";
@@ -57,6 +58,8 @@ export default function Inbox({ me }: { me: Me | null }) {
   }
 
   useEffect(reload, []);
+  // スマホでタブ復帰した時や生成完了後に手動リロードしなくても一覧が追従するように
+  useAutoRefresh(reload);
 
   async function runMonitor() {
     setBusy(true);
