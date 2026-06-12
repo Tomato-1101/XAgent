@@ -36,6 +36,14 @@ function replyTargetUrl(d: Draft): string {
 
 const KIND_LABEL: Record<string, string> = { reply: "返信", quote: "引用RT", post: "投稿" };
 
+// ジョブ進捗の表示文(「何をしているか（経過 N分M秒）」)。待ち時間とエラーを区別できるようにする。
+function progressLabel(message: string, elapsedSeconds: number): string {
+  const m = Math.floor(elapsedSeconds / 60);
+  const s = elapsedSeconds % 60;
+  const elapsed = m > 0 ? `${m}分${s}秒` : `${s}秒`;
+  return `${message || "実行中"}（経過 ${elapsed}）`;
+}
+
 export default function Inbox({ me }: { me: Me | null }) {
   const [items, setItems] = useState<Draft[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -43,8 +51,10 @@ export default function Inbox({ me }: { me: Me | null }) {
   const [sending, setSending] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
   const [runLimit, setRunLimit] = useState(10); // 1回実行で作る上限(乱造防止・既定10)
+  const [runProgress, setRunProgress] = useState<string | null>(null); // 監視1回実行の進捗
   const [quoteUrl, setQuoteUrl] = useState(""); // 手動で引用案を作る対象ツイートURL
   const [quoting, setQuoting] = useState(false);
+  const [quoteProgress, setQuoteProgress] = useState<string | null>(null); // 引用案生成の進捗
   const [pending, setPending] = useState<Draft | null>(null);
   const [recastingId, setRecastingId] = useState<number | null>(null); // 型切替中の案id
   const toast = useToast();
@@ -65,14 +75,24 @@ export default function Inbox({ me }: { me: Me | null }) {
     setBusy(true);
     setError(null);
     setInfo(null);
+    setRunProgress("開始しています…");
     try {
-      const r = await api.monitorRunOnce(runLimit > 0 ? runLimit : undefined);
-      setInfo(`返信案 ${r.reply_suggestions} 件・引用案 ${r.quote_suggestions} 件を生成しました（最大 ${runLimit} 件）`);
+      const r = await api.monitorRunOnce(runLimit > 0 ? runLimit : undefined, (msg, sec) => {
+        setRunProgress(progressLabel(msg, sec));
+        // 下書きは選定後1件ずつDBに入るので、作成が始まったら一覧へ即反映する
+        if (msg.startsWith("下書き作成中")) reload();
+      });
+      setInfo(
+        r.candidates === 0
+          ? "新しい絡み候補が見つかりませんでした（24時間以内の対象投稿がない、または生成済み・却下済み）。"
+          : `返信案 ${r.reply_suggestions} 件・引用案 ${r.quote_suggestions} 件を生成しました（候補 ${r.candidates} 件・上限 ${runLimit} 件）`
+      );
       reload();
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
+      setRunProgress(null);
     }
   }
 
@@ -83,8 +103,9 @@ export default function Inbox({ me }: { me: Me | null }) {
     setQuoting(true);
     setError(null);
     setInfo(null);
+    setQuoteProgress("開始しています…");
     try {
-      await api.quoteFromUrl(url);
+      await api.quoteFromUrl(url, (msg, sec) => setQuoteProgress(progressLabel(msg, sec)));
       setQuoteUrl("");
       setInfo("引用案を生成しました。下の「引用案」に表示されます。");
       reload();
@@ -92,6 +113,7 @@ export default function Inbox({ me }: { me: Me | null }) {
       setError(String(e));
     } finally {
       setQuoting(false);
+      setQuoteProgress(null);
     }
   }
 
@@ -312,6 +334,16 @@ export default function Inbox({ me }: { me: Me | null }) {
 
       <AgentHint title="絡みをClaude Codeに任せる" phrases={AGENT_PHRASES} />
 
+      {busy && runProgress && (
+        <div className="flex items-center gap-2 text-sm text-amber-300/90">
+          <Spinner /> <span>{runProgress}</span>
+        </div>
+      )}
+      {quoting && quoteProgress && (
+        <div className="flex items-center gap-2 text-sm text-amber-300/90">
+          <Spinner /> <span>{quoteProgress}</span>
+        </div>
+      )}
       {info && <div className="text-sm text-sky-300">{info}</div>}
       {error && <div className="text-sm text-red-300">エラー: {error}</div>}
       {items.length === 0 && <div className="text-sm text-zinc-500">承認待ちの案はありません。</div>}

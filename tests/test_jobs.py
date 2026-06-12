@@ -15,20 +15,56 @@ from tests.test_api import client, wait_job  # noqa: F401 (fixture)
 
 
 def test_job_success_roundtrip(client):
-    job_id = start_job(lambda: {"answer": 42})
+    job_id = start_job(lambda progress: {"answer": 42})
     j = wait_job(client, _FakeResp(job_id))
     assert j["status"] == "done"
     assert j["result"] == {"answer": 42}
 
 
 def test_job_error_returns_message(client):
-    def _boom() -> dict:
+    def _boom(progress) -> dict:
         raise RuntimeError("AI生成が240秒でタイムアウトしました。")
 
     job_id = start_job(_boom)
     j = wait_job(client, _FakeResp(job_id))
     assert j["status"] == "error"
     assert "タイムアウト" in j["error"]
+
+
+def test_job_progress_and_elapsed_visible_while_running(client):
+    """実行中のジョブは progress(何をしているか)と elapsed_seconds(経過秒)を返す。
+
+    無表示の待ちはユーザーにはハング/エラーと区別がつかないため、
+    フロントがポーリングで進捗を表示できることを保証する。
+    """
+    import threading
+    import time
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _slow(progress) -> dict:
+        progress("候補収集中: リスト「絡み」 3/120人")
+        started.set()
+        release.wait(5)
+        return {"ok": True}
+
+    job_id = start_job(_slow)
+    try:
+        assert started.wait(5)
+        for _ in range(100):  # progress の反映を最大5秒待つ
+            r = client.get(f"/jobs/{job_id}").json()
+            if r["progress"]:
+                break
+            time.sleep(0.05)
+        assert r["status"] == "running"
+        assert r["progress"] == "候補収集中: リスト「絡み」 3/120人"
+        assert isinstance(r["elapsed_seconds"], int)
+        assert r["elapsed_seconds"] >= 0
+    finally:
+        release.set()
+    j = wait_job(client, _FakeResp(job_id))
+    assert j["status"] == "done"
 
 
 def test_job_unknown_id_404(client):

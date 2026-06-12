@@ -8,6 +8,7 @@ AIのバッチ判断で「絡む価値が高い投稿」を分散選定して下
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, select
@@ -167,6 +168,7 @@ def _candidate(t: dict, handle: str | None) -> dict:
 def collect_engage_candidates(
     session: Session, x_client: XClient, me_user_id: str,
     cfg: MonitorSettings | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> list[dict]:
     """全有効ソース(手動対象/リスト/ジャンル/フォロー中)から直近24時間の本人オリジナル投稿を
     集め、AIバッチ選定の候補一覧を返す。
@@ -174,8 +176,10 @@ def collect_engage_candidates(
     since_id カーソルは使わない(24時間窓で毎回取り直す)。重複防止は
     (1)既に同じ tweet を対象にした Draft があれば状態問わず除外(却下済みへの再生成もしない)、
     (2)ソース横断の tweet_id 重複排除。候補は新しい順に SELECT_MAX_CANDIDATES 件まで。
+    収集は1アカウント1リクエストで数十分かかりうるため、progress で進捗を逐次通知する。
     """
     cfg = cfg or get_monitor_settings(session)
+    note = progress or (lambda m: None)
     raw: list[tuple[dict, str | None]] = []
     if cfg.manual_targets_enabled:
         targets = session.exec(
@@ -185,7 +189,8 @@ def collect_engage_candidates(
                 EngageTarget.kind == TargetKind.MANUAL,
             )
         ).all()
-        for target in targets:
+        for i, target in enumerate(targets):
+            note(f"候補収集中: 手動対象 {i + 1}/{len(targets)}人 (@{target.handle})")
             for t in _drop_reposts(
                 x_client.get_user_timeline(target.user_id, official_fallback=False)
             ):
@@ -198,12 +203,18 @@ def collect_engage_candidates(
             )
         ).all()
         for lt in lists:
-            for m in x_client.get_list_members(lt.list_id, max_total=LIST_MEMBERS_MAX):
-                uid = m.get("id")
-                if not uid:
-                    continue
+            note(f"リスト「{lt.handle}」のメンバー一覧を取得中")
+            members = [
+                m for m in x_client.get_list_members(lt.list_id, max_total=LIST_MEMBERS_MAX)
+                if m.get("id")
+            ]
+            for i, m in enumerate(members):
+                note(
+                    f"候補収集中: リスト「{lt.handle}」 {i + 1}/{len(members)}人"
+                    f" (@{m.get('username')})"
+                )
                 for t in _drop_reposts(
-                    x_client.get_user_timeline(uid, official_fallback=False)
+                    x_client.get_user_timeline(m["id"], official_fallback=False)
                 ):
                     raw.append((t, m.get("username")))
     if cfg.keyword_search_enabled:
@@ -214,16 +225,20 @@ def collect_engage_candidates(
                 EngageTarget.keyword != None,  # noqa: E711
             )
         ).all()
-        for target in genres:
+        for i, target in enumerate(genres):
+            note(f"候補収集中: キーワード検索 {i + 1}/{len(genres)}件 ({target.keyword})")
             for t in _drop_reposts(x_client.search_recent(target.keyword)):
                 raw.append((t, None))
     if cfg.following_enabled:
-        for user in x_client.get_following(me_user_id, max_total=FOLLOWING_MAX_ACCOUNTS):
-            uid = user.get("id")
-            if not uid:
-                continue
+        note("候補収集中: フォロー中アカウントの一覧を取得中")
+        users = [
+            u for u in x_client.get_following(me_user_id, max_total=FOLLOWING_MAX_ACCOUNTS)
+            if u.get("id")
+        ]
+        for i, user in enumerate(users):
+            note(f"候補収集中: フォロー中 {i + 1}/{len(users)}人 (@{user.get('username')})")
             for t in _drop_reposts(
-                x_client.get_user_timeline(uid, official_fallback=False)
+                x_client.get_user_timeline(user["id"], official_fallback=False)
             ):
                 raw.append((t, user.get("username")))
 
@@ -257,6 +272,7 @@ def collect_engage_candidates(
 def run_once(
     session: Session, x_client: XClient, formatter: Formatter, me_user_id: str,
     max_drafts: int | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict:
     """1回分の監視サイクル。各ソースはトグル(MonitorSettings)で個別にオン/オフ。
 
@@ -264,22 +280,33 @@ def run_once(
     直近24時間の投稿をまとめて収集し、1回のAIバッチ判断で「どれに・reply/quoteどちらで・
     どんな本文で」絡むかを分散選定する(従来の直列スキャンによる同一アカウント偏りの解消)。
     総生成数はバジェットで上限管理(手動の1回実行は max_drafts でその回限りの上限を渡せる。
-    指定なしは設定値 max_drafts_per_run)。
+    指定なしは設定値 max_drafts_per_run)。戻り値の candidates は選定に渡した候補数
+    (0なら「新しい候補なし」をフロントが区別して表示できる)。
     """
+    note = progress or (lambda m: None)
     cfg = get_monitor_settings(session)
     cap = cfg.max_drafts_per_run if max_drafts is None else max_drafts
     budget = max(0, int(cap or 0))
     replies = 0
     quotes = 0
+    n_candidates = 0
 
     if cfg.mentions_enabled and budget > 0:
+        note("自分宛メンションを確認中")
         r, _ = poll_mentions(session, x_client, formatter, me_user_id, limit=budget)
         replies += r
         budget -= r
 
     if budget > 0:
-        candidates = collect_engage_candidates(session, x_client, me_user_id, cfg)
+        candidates = collect_engage_candidates(
+            session, x_client, me_user_id, cfg, progress=note
+        )
+        n_candidates = len(candidates)
         if candidates:
+            note(
+                f"AIバッチ選定中: 候補{len(candidates)}件から最大{budget}件を選定"
+                "(数分〜15分かかることがあります)"
+            )
             selections = formatter.select_engagements(
                 candidates,
                 budget,
@@ -287,7 +314,8 @@ def run_once(
                 reply_playbook=templates_mod.active_body(session, TemplateKind.REPLY),
                 quote_playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
             )
-            for s in selections:
+            for i, s in enumerate(selections):
+                note(f"下書き作成中 {i + 1}/{len(selections)}件")
                 cand = s["candidate"]
                 kind = DraftKind.QUOTE if s["kind"] == "quote" else DraftKind.REPLY
                 create_engage_draft_from_text(
@@ -305,7 +333,11 @@ def run_once(
                 else:
                     replies += 1
             # 選定0件でもバッチ判断のトークンは消費しているので記録する
-            note = "engage-select" if selections else "engage-select-empty"
-            bill_formatter_usage(session, formatter, note=note)
+            bill_note = "engage-select" if selections else "engage-select-empty"
+            bill_formatter_usage(session, formatter, note=bill_note)
             session.commit()
-    return {"reply_suggestions": replies, "quote_suggestions": quotes}
+    return {
+        "reply_suggestions": replies,
+        "quote_suggestions": quotes,
+        "candidates": n_candidates,
+    }

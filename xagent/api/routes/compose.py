@@ -260,8 +260,10 @@ def quote_from_url(
         raise HTTPException(400, "ツイートURL(x.com/.../status/<id>)を入力してください。")
     tweet_id, handle, _url = ref
 
-    def _generate() -> dict:
+    def _generate(set_progress: Callable[[str], None]) -> dict:
+        set_progress("元ポストの本文を取得中")
         target_text, target_handle, target_created_at = _fetch_target(x_client, tweet_id)
+        set_progress("AIが引用コメントを生成中(数十秒〜数分)")
         with session_factory() as session:
             draft = service.create_quote_draft(
                 session,

@@ -430,9 +430,11 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 | メソッド | パス | 用途 | エラー |
 |---|---|---|---|
-| GET | `/jobs/{job_id}` | ジョブ状態 `{job_id, status: running\|done\|error, result, error}` | 404(再起動でジョブ消滅) |
+| GET | `/jobs/{job_id}` | ジョブ状態 `{job_id, status: running\|done\|error, progress, elapsed_seconds, result, error}` | 404(再起動でジョブ消滅) |
 
 ジョブは**プロセス内メモリ保持**(`xagent/api/jobs.py`、完了10分後に掃除)。worker 再起動で消えるが、結果の実体(下書き)は DB に入るので永続化しない。フロントは 404 を「サーバが再起動したため生成が中断されました」と表示し、一時的な接続断はポーリング継続で吸収する。あわせて未捕捉例外は `main.py` のミドルウェアが **CORS ヘッダ付き JSON 500** に変換する(Starlette 既定のプレーン500は CORSMiddleware を通らず、vite dev :5180 のクロスオリジンでは一律 Failed to fetch に化けるため)。
+
+**進捗表示(2026-06-12〜)**: `start_job(fn)` の `fn` は `set_progress("メッセージ")` を受け取り、節目で「何をしているか」を更新する(無表示の長い待ちはユーザーにはハング/エラーと区別がつかないため)。`GET /jobs/{id}` は `progress`(文字列) と `elapsed_seconds`(サーバ計測の経過秒) を返し、フロント(`runJob` の `onProgress`)が「候補収集中: リスト「絡み」 12/37人 (@handle)（経過 3分20秒）」のように表示する。run-once は収集アカウントごと・AIバッチ選定開始・下書き作成1件ごとに更新し、Inbox は「下書き作成中」進捗を受けたら一覧を即リロードして生成済みの案から順次表示する。ジョブ失敗は `status=error` に加えて `logger.exception` でサーバログ(`~/Library/Logs/xagent.err.log`)にも残す(画面遷移でポーリングが切れると失敗がどこにも記録されないため)。run-once の result には `candidates`(選定に渡した候補数) が含まれ、0 のとき UI は「新しい絡み候補なし」と区別して表示する。
 
 ### drafts(`/drafts`)
 

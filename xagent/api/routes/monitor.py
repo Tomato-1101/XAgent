@@ -34,10 +34,13 @@ def run_once(
     /jobs/{id} をポーリングする(同期だとブラウザfetchの約300秒上限で必ず切れる)。
     """
 
-    def _run() -> dict:
+    def _run(set_progress: Callable[[str], None]) -> dict:
+        set_progress("自分のアカウント情報を確認中")
         me = x_client.get_me()
         with session_factory() as session:
-            return monitor_mod.run_once(session, x_client, formatter, me["id"], max_drafts=limit)
+            return monitor_mod.run_once(
+                session, x_client, formatter, me["id"], max_drafts=limit, progress=set_progress
+            )
 
     return {"job_id": start_job(_run)}
 

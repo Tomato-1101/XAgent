@@ -165,7 +165,7 @@ def test_run_once_batch_select_creates_drafts(session, fake_formatter):
     )
     res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
     # メンション1(返信のみ) + バッチ選定1(既定reply) = 返信2・引用0
-    assert res == {"reply_suggestions": 2, "quote_suggestions": 0}
+    assert res == {"reply_suggestions": 2, "quote_suggestions": 0, "candidates": 1}
     assert len(fake_formatter.select_calls) == 1  # AI判断は1回のバッチに集約
 
 
@@ -176,7 +176,7 @@ def test_run_once_quote_kind_creates_quote_draft(session, fake_formatter):
     session.commit()
     fx = FakeXClient(timelines={"u9": [{"id": "202", "text": "拡散したいニュース", "author_id": "u9"}]})
     res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
-    assert res == {"reply_suggestions": 0, "quote_suggestions": 1}
+    assert res == {"reply_suggestions": 0, "quote_suggestions": 1, "candidates": 1}
     d = session.exec(select(Draft).where(Draft.kind == DraftKind.QUOTE)).one()
     assert d.target_tweet_id == "202"
     assert d.target_handle == "famous"
@@ -197,6 +197,27 @@ def test_run_once_spreads_across_accounts(session, fake_formatter):
     # 後段アカウントの投稿もAI選定の候補に含まれている(直列バジェット先食いが起きない)
     handles = {c["handle"] for c in fake_formatter.select_calls[0]["candidates"]}
     assert handles == {"a1", "a2"}
+
+
+def test_run_once_reports_progress(session, fake_formatter):
+    """run_once は progress コールバックで「何をしているか」を逐次通知する。
+
+    収集(1アカウント1リクエスト)とAIバッチ選定は数分〜数十分かかるため、
+    フロントが「エラーではなく待ち時間」だと示せることを保証する。
+    """
+    monitor.set_monitor_settings(session, mentions_enabled=True)
+    session.add(EngageTarget(kind=TargetKind.MANUAL, handle="famous", user_id="u9", active=True))
+    session.commit()
+    fx = FakeXClient(
+        mentions=[{"id": "101", "text": "m", "author_id": "u1"}],
+        timelines={"u9": [{"id": "202", "text": "t", "author_id": "u9"}]},
+    )
+    notes: list[str] = []
+    monitor.run_once(session, fx, fake_formatter, me_user_id="me", progress=notes.append)
+    assert any("メンション" in n for n in notes)
+    assert any("候補収集中" in n and "@famous" in n for n in notes)
+    assert any("AIバッチ選定中" in n and "候補1件" in n for n in notes)
+    assert any("下書き作成中" in n for n in notes)
 
 
 def test_mentions_can_be_disabled(session, fake_formatter):
@@ -259,7 +280,7 @@ def test_max_drafts_zero_creates_nothing(session, fake_formatter):
     monitor.set_monitor_settings(session, max_drafts_per_run=0)
     fx = FakeXClient(mentions=[{"id": "101", "text": "m", "author_id": "u1"}])
     res = monitor.run_once(session, fx, fake_formatter, me_user_id="me")
-    assert res == {"reply_suggestions": 0, "quote_suggestions": 0}
+    assert res == {"reply_suggestions": 0, "quote_suggestions": 0, "candidates": 0}
 
 
 def test_within_age_skips_old_posts(session, fake_formatter):

@@ -88,9 +88,14 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 interface JobStatus {
   job_id: string;
   status: "running" | "done" | "error";
+  progress: string | null;
+  elapsed_seconds: number;
   result: unknown;
   error: string | null;
 }
+
+/** 実行中ジョブの進捗通知。message は「何をしているか」、elapsedSeconds はサーバ計測の経過秒。 */
+export type JobProgress = (message: string, elapsedSeconds: number) => void;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -99,8 +104,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * ポーリングして結果を返す(同期fetchだとブラウザの約300秒上限・CLIタイムアウト・
  * サーバ再起動で「Failed to fetch」になるため)。ポーリング中の一時的な接続断は
  * リトライ継続し、404(サーバ再起動でジョブ消滅)だけ中断として扱う。
+ * onProgress でサーバ側の進捗(何をしているか+経過秒)を受け取れる(エラーと待ち時間の区別用)。
  */
-async function runJob<T>(path: string, init?: RequestInit): Promise<T> {
+async function runJob<T>(path: string, init?: RequestInit, onProgress?: JobProgress): Promise<T> {
   const { job_id } = await req<{ job_id: string }>(path, init);
   for (;;) {
     await sleep(2000);
@@ -116,6 +122,7 @@ async function runJob<T>(path: string, init?: RequestInit): Promise<T> {
     }
     if (j.status === "done") return j.result as T;
     if (j.status === "error") throw new Error(j.error ?? "生成に失敗しました。");
+    onProgress?.(j.progress ?? "", j.elapsed_seconds);
   }
 }
 
@@ -198,8 +205,12 @@ export const api = {
   }) => req<Draft>("/compose/command", { method: "POST", body: JSON.stringify(payload) }),
 
   // URLから引用案(引用RT)をAIに生成させる(Inboxの手動ボタン)。ジョブ経由(数十秒〜数分)。
-  quoteFromUrl: (url: string) =>
-    runJob<Draft>("/compose/quote-from-url", { method: "POST", body: JSON.stringify({ url }) }),
+  quoteFromUrl: (url: string, onProgress?: JobProgress) =>
+    runJob<Draft>(
+      "/compose/quote-from-url",
+      { method: "POST", body: JSON.stringify({ url }) },
+      onProgress,
+    ),
 
   uploadMedia: async (file: File): Promise<MediaItem> => {
     const fd = new FormData();
@@ -259,8 +270,12 @@ export const api = {
       body: JSON.stringify({ override }),
     }),
   // 絡みの下書きをリプライ⇄引用RTに作り直す(本文を再生成し型を切替)。Inboxの手動切替ボタン。
-  recast: (id: number, to: "reply" | "quote") =>
-    runJob<Draft>(`/drafts/${id}/recast`, { method: "POST", body: JSON.stringify({ to }) }),
+  recast: (id: number, to: "reply" | "quote", onProgress?: JobProgress) =>
+    runJob<Draft>(
+      `/drafts/${id}/recast`,
+      { method: "POST", body: JSON.stringify({ to }) },
+      onProgress,
+    ),
 
   getStyle: () => req<{ guide_text: string; examples: string[] }>("/style"),
   putStyle: (guide_text: string) =>
@@ -282,11 +297,12 @@ export const api = {
   deleteTarget: (id: number) => req<{ deleted: number }>(`/targets/${id}`, { method: "DELETE" }),
 
   // limit を渡すとその回だけ生成数を上限管理(乱造防止)。未指定なら設定の max_drafts_per_run。
-  // 候補収集+バッチAI選定で数分〜15分かかるためジョブ経由。
-  monitorRunOnce: (limit?: number) =>
-    runJob<{ reply_suggestions: number; quote_suggestions: number }>(
+  // 候補収集+バッチAI選定で数分〜15分かかるためジョブ経由。onProgress で進捗を逐次受け取る。
+  monitorRunOnce: (limit?: number, onProgress?: JobProgress) =>
+    runJob<{ reply_suggestions: number; quote_suggestions: number; candidates: number }>(
       `/monitor/run-once${limit != null ? `?limit=${limit}` : ""}`,
       { method: "POST" },
+      onProgress,
     ),
   getMonitorSettings: () => req<MonitorSettings>("/monitor/settings"),
   putMonitorSettings: (flags: Partial<MonitorSettings>) =>

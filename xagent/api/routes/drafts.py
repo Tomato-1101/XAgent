@@ -126,7 +126,8 @@ def recast(
     _load(session, draft_id)  # 404 だけは即返す
     to_kind = DraftKind.QUOTE if req.to == "quote" else DraftKind.REPLY
 
-    def _run() -> dict:
+    def _run(set_progress: Callable[[str], None]) -> dict:
+        set_progress("AIが本文を再生成中(数十秒〜数分)")
         with session_factory() as s:
             d = service.get_draft(s, draft_id)
             if d is None:
