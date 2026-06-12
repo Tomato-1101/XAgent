@@ -103,6 +103,8 @@ class TwitterApiIoClient:
             # AIのバッチ選定材料(伸び始めの投稿を優先するための指標)
             "like_count": _as_int(t.get("likeCount")),
             "retweet_count": _as_int(t.get("retweetCount")),
+            # インプレッション。絡み候補の最低ライン(MonitorSettings.min_impressions)判定に使う
+            "view_count": _as_int(t.get("viewCount")),
         }
 
     @staticmethod

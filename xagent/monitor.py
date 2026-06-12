@@ -34,6 +34,15 @@ LIST_MEMBERS_MAX = 500       # リスト連携で展開するメンバー数の�
 TARGET_MAX_AGE_HOURS = 24    # 「今から24時間前まで」の投稿だけ絡み候補にする(古いリプは無意味)
 SELECT_MAX_CANDIDATES = 120  # AIバッチ選定に渡す候補数の安全弁(新しい順に残す)
 
+CELEB_MAX_PER_TICK = 3       # 有名人ウォッチ1回で作る絡み案の上限(乱造防止)
+CELEB_SEARCH_CHUNK = 12      # 1検索クエリに入れる from: の数(クエリ長の安全弁)
+# 有名人の「AIについての投稿」を検索で拾うキーワード(X検索のOR条件)。
+# 検索クエリ側で絞るのでタイムライン全件を読まず、ヒットが無ければLLMも呼ばない(API節約)。
+AI_TOPIC_KEYWORDS = (
+    "AI", "人工知能", "生成AI", "ChatGPT", "GPT", "Claude",
+    "Gemini", "LLM", "OpenAI", "AGI",
+)
+
 
 def get_monitor_settings(session: Session) -> MonitorSettings:
     """監視トグル設定(単一行)。無ければ既定で作成する。"""
@@ -52,8 +61,14 @@ def set_monitor_settings(session: Session, **flags) -> MonitorSettings:
     for k, v in flags.items():
         if not hasattr(row, k):
             continue
-        if k == "max_drafts_per_run" and isinstance(v, int) and not isinstance(v, bool):
+        if (
+            k in ("max_drafts_per_run", "min_impressions")
+            and isinstance(v, int)
+            and not isinstance(v, bool)
+        ):
             setattr(row, k, max(0, v))
+        elif k == "celeb_list_id" and isinstance(v, str):
+            setattr(row, k, v.strip() or None)
         elif isinstance(v, bool):
             setattr(row, k, v)
     session.add(row)
@@ -162,6 +177,7 @@ def _candidate(t: dict, handle: str | None) -> dict:
         "created_at": t.get("created_at"),
         "like_count": t.get("like_count", 0),
         "retweet_count": t.get("retweet_count", 0),
+        "view_count": t.get("view_count", 0),
     }
 
 
@@ -260,6 +276,11 @@ def collect_engage_candidates(
         dt = to_naive_utc(t.get("created_at"))
         if dt is not None and dt < cutoff:
             continue
+        # 最低インプレッション未満には絡まない(伸びていない投稿へのリプは露出が取れない)。
+        # view数が取れない投稿(公式APIフォールバック経路・テスト)は判定不能として通す。
+        vc = t.get("view_count")
+        if vc is not None and int(vc) < cfg.min_impressions:
+            continue
         seen.add(tid)
         out.append(_candidate(t, handle))
     out.sort(
@@ -341,3 +362,100 @@ def run_once(
         "quote_suggestions": quotes,
         "candidates": n_candidates,
     }
+
+
+def _celeb_queries(usernames: list[str]) -> list[str]:
+    """有名人ウォッチの検索クエリを組み立てる(from: をチャンク分割してクエリ長を抑える)。"""
+    kw = " OR ".join(AI_TOPIC_KEYWORDS)
+    out = []
+    for i in range(0, len(usernames), CELEB_SEARCH_CHUNK):
+        froms = " OR ".join(f"from:{u}" for u in usernames[i : i + CELEB_SEARCH_CHUNK])
+        out.append(f"({froms}) ({kw}) within_time:24h")
+    return out
+
+
+def run_celeb_once(
+    session: Session, x_client: XClient, formatter: Formatter,
+    max_drafts: int | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> dict:
+    """有名人ウォッチを1回実行: リスト(celeb_list_id)のメンバーがAIについて投稿していたら
+    絡み案(主にreply)を即生成する。
+
+    検出はアカウント横断の検索1〜2クエリで行い、メンバーのタイムラインを巡回しない(API節約)。
+    キーワードに当たる投稿が無ければLLMを呼ばない。カーソル(stream="celeb")で同じ投稿を
+    二度LLMにかけない。有名人は min_impressions の対象外(投稿直後の素早い反応を優先)。
+    下書きを作るだけで投稿しない(人間承認必須)。
+    """
+    note = progress or (lambda m: None)
+    cfg = get_monitor_settings(session)
+    if not cfg.celeb_list_id:
+        return {"candidates": 0, "reply_suggestions": 0, "quote_suggestions": 0,
+                "error": "有名人リストが未設定です(celeb_list_id)"}
+    note("有名人リストのメンバーを取得中")
+    usernames = [
+        m["username"]
+        for m in x_client.get_list_members(cfg.celeb_list_id, max_total=LIST_MEMBERS_MAX)
+        if m.get("username")
+    ]
+    if not usernames:
+        return {"candidates": 0, "reply_suggestions": 0, "quote_suggestions": 0,
+                "error": "有名人リストにメンバーがいません"}
+    cur = _get_cursor(session, "celeb")
+    raw: list[dict] = []
+    for q in _celeb_queries(usernames):
+        note(f"有名人{len(usernames)}人のAI言及投稿を検索中")
+        raw.extend(x_client.search_recent(q, since_id=cur.last_seen_id))
+    existing = {
+        tid
+        for tid in session.exec(
+            select(Draft.target_tweet_id).where(Draft.target_tweet_id != None)  # noqa: E711
+        ).all()
+        if tid
+    }
+    seen: set[str] = set()
+    candidates: list[dict] = []
+    for t in _within_age(_drop_reposts(raw)):
+        tid = str(t.get("id", ""))
+        if not tid or tid in seen or tid in existing:
+            continue
+        seen.add(tid)
+        c = _candidate(t, None)
+        c["note"] = "有名人のAI関連投稿。即時の反応に価値がある(リプ欄で認知を取る)。"
+        candidates.append(c)
+    replies = 0
+    quotes = 0
+    budget = CELEB_MAX_PER_TICK if max_drafts is None else max(0, int(max_drafts))
+    if candidates and budget > 0:
+        note(f"AIが選定と本文生成中: 候補{len(candidates)}件から最大{budget}件")
+        selections = formatter.select_engagements(
+            candidates,
+            budget,
+            style_guide=active_style_guide(session),
+            reply_playbook=templates_mod.active_body(session, TemplateKind.REPLY),
+            quote_playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
+        )
+        for i, s in enumerate(selections):
+            note(f"下書き作成中 {i + 1}/{len(selections)}件")
+            cand = s["candidate"]
+            kind = DraftKind.QUOTE if s["kind"] == "quote" else DraftKind.REPLY
+            create_engage_draft_from_text(
+                session, kind, s["tweet_id"], s["text"],
+                target_text=cand.get("text", ""),
+                target_handle=cand.get("handle"),
+                target_created_at=cand.get("created_at"),
+                reason=s.get("reason", ""),
+            )
+            if kind == DraftKind.QUOTE:
+                quotes += 1
+            else:
+                replies += 1
+        bill_formatter_usage(session, formatter, note="celeb-select")
+    # 選定されなかった投稿も再度LLMにかけない(カーソルは取得した全hitの最大IDまで進める)
+    new_max = _max_id([str(t.get("id", "")) for t in raw])
+    if new_max and int(new_max) > int(cur.last_seen_id or 0):
+        cur.last_seen_id = new_max
+        session.add(cur)
+    session.commit()
+    return {"candidates": len(candidates), "reply_suggestions": replies,
+            "quote_suggestions": quotes}

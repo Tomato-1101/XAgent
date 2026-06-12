@@ -45,6 +45,9 @@ _ADDED_COLUMNS = {
         ("max_drafts_per_run", "INTEGER", "DEFAULT 10"),
         ("auto_monitor_enabled", "BOOLEAN", "DEFAULT 1"),
         ("auto_post_enabled", "BOOLEAN", "DEFAULT 1"),
+        ("min_impressions", "INTEGER", "DEFAULT 10000"),
+        ("celeb_watch_enabled", "BOOLEAN", "DEFAULT 0"),
+        ("celeb_list_id", "VARCHAR", ""),
     ],
     "engagetarget": [
         ("list_id", "VARCHAR", ""),

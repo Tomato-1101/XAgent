@@ -51,7 +51,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 ### プロセス構成
 
 - **API プロセス(常駐)**: FastAPI (`xagent/api/main.py`) を uvicorn で起動。launchd (`com.tomato.xagent`、`KeepAlive` 有効)で `127.0.0.1:8000` に常駐する。
-- **内蔵 BackgroundScheduler**: API プロセスの `lifespan` 内で `init_db()` 後、`scheduler_enabled` が真なら APScheduler の `BackgroundScheduler(timezone="UTC")` を生成。別デーモンを起こさず同1プロセスで予約投稿(`queue_tick`、既定60秒)・絡み案生成(`monitor_tick`、既定180秒)・ニュース速報生成(`news_tick`、既定600秒)を回す。**ただし monitor は `MonitorSettings.auto_monitor_enabled`、news は `NewsSettings.auto_news_enabled`(いずれも既定OFF)でゲートされ、OFFの間は即returnしてAPIを消費しない**(UIトグルでオンオフ。乱造防止のため既定OFF＝必要な時だけオンにする)。launchd 常駐構成では実際に回るのはこの内蔵スケジューラ。
+- **内蔵 BackgroundScheduler**: API プロセスの `lifespan` 内で `init_db()` 後、`scheduler_enabled` が真なら APScheduler の `BackgroundScheduler(timezone="UTC")` を生成。別デーモンを起こさず同1プロセスで予約投稿(`queue_tick`、既定60秒)・絡み案生成(`monitor_tick`、既定180秒)・ニュース速報生成(`news_tick`、既定600秒)・有名人ウォッチ(`celeb_tick`、既定600秒)を回す。**ただし monitor は `MonitorSettings.auto_monitor_enabled`、news は `NewsSettings.auto_news_enabled`、celeb は `MonitorSettings.celeb_watch_enabled`(いずれも既定OFF)でゲートされ、OFFの間は即returnしてAPIを消費しない**(UIトグルでオンオフ。乱造防止のため既定OFF＝必要な時だけオンにする)。launchd 常駐構成では実際に回るのはこの内蔵スケジューラ。
 - **フロントエンド**: Vite + React + TypeScript の SPA (`frontend/`)。開発時は `vite.config.ts` で `port: 5180, strictPort: true` に固定(自動フォールバックしない)。**本番UIは FastAPI が `frontend/dist` を同一オリジンで配信**(`GET /` が index.html を no-cache 返却、`/assets` を StaticFiles マウント。dist 未ビルドなら `/` は 503 で自己説明エラー)。
 - **リモートアクセス(スマホ)**: `tailscale serve --bg 8000` で tailnet 内に HTTPS プロキシ(`https://<mac名>.<tailnet>.ts.net` → `127.0.0.1:8000`)。uvicorn のバインドは `127.0.0.1` のまま変えない(インターネット非公開)。スマホは Tailscale アプリで接続し、ブラウザで上記 URL を開く。同一オリジン配信のため CORS 設定は不要。認証は `API_TOKEN`(下記 §7)。
 - **永続化**: SQLite (`xagent.db`、`DB_PATH` 既定)。SQLModel(SQLAlchemy 上)経由でアクセスし、生 SQL は原則不使用。
@@ -219,6 +219,9 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `auto_monitor_enabled` | `bool` | `False` | 絡み案の自動生成(monitor_tick)を回すか。UI(Settings)のトグルで制御。乱造防止のため既定OFF。OFFなら即returnしAPI消費なし |
 | `auto_post_enabled` | `bool` | `True` | 「現在は未使用」。予約投稿は常時実行方針で、緊急停止は `config.posting_enabled` が担う。互換のため列のみ残存 |
 | `max_drafts_per_run` | `int` | `10` | 1監視サイクルで作る下書き総数上限(全ソース横断で共有) |
+| `min_impressions` | `int` | `10000` | 絡み候補の最低インプレッション(view数)。未満は候補から除外(伸びていない投稿へのリプは露出が取れない)。view数が取れない投稿(公式APIフォールバック経路)は判定不能として通す。**有名人ウォッチは対象外** |
+| `celeb_watch_enabled` | `bool` | `False` | 有名人ウォッチ(celeb_tick)を回すか。UI(Settings)のトグルで制御 |
+| `celeb_list_id` | `str?` | `None` | 有名人ウォッチ対象のXリストID(メンバーのAI言及投稿を検索で検出) |
 | `updated_at` | `datetime` | `_utcnow` | (`set_monitor_settings` 内で明示更新しない) |
 
 #### `NewsSettings`(`newssettings`)— ニュース速報生成の設定【単一行運用】
@@ -262,7 +265,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 
 `create_all` が既存テーブルに列追加しない欠点を補うのが `_migrate()`。`_ADDED_COLUMNS` は `{テーブル名: [(列名, SQLite型, デフォルト句), ...]}` で、`PRAGMA table_info` で既存列を調べ、無い列だけ `ALTER TABLE ... ADD COLUMN` する(前方追加専用。型変更・列削除・データ移行はしない)。
 
-`_ADDED_COLUMNS` の全列: `pastpost`(`author_user_id`/`author_handle`/`is_own DEFAULT 1`)、`draft`(`blackout_override DEFAULT 0`/`target_text DEFAULT ''`/`target_created_at`/`schedule_missed DEFAULT 0`)、`monitorsettings`(`max_drafts_per_run DEFAULT 10`/`auto_monitor_enabled DEFAULT 1`/`auto_post_enabled DEFAULT 1`)、`engagetarget`(`list_id`)。
+`_ADDED_COLUMNS` の全列: `pastpost`(`author_user_id`/`author_handle`/`is_own DEFAULT 1`)、`draft`(`blackout_override DEFAULT 0`/`target_text DEFAULT ''`/`target_created_at`/`schedule_missed DEFAULT 0`)、`monitorsettings`(`max_drafts_per_run DEFAULT 10`/`auto_monitor_enabled DEFAULT 1`/`auto_post_enabled DEFAULT 1`/`min_impressions DEFAULT 10000`/`celeb_watch_enabled DEFAULT 0`/`celeb_list_id`)、`engagetarget`(`list_id`)。
 
 ハマりどころ: **モデルに新フィールドを足したら、既存DBへ反映するには `_ADDED_COLUMNS` への追記も必要**(`create_all` だけでは既存テーブルに列が増えない)。
 
@@ -383,7 +386,8 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 ### 監視・絡み(§10 に動作詳細)
 
-- **監視ソース**: メンション(reply案、**既定オフ=手動返信方針**)/手動MANUAL対象/Xリスト/ジャンルkeyword(既定オフ)/フォロー中(既定オフ)。絡み対象は**本人オリジナル投稿のみ**(RT・引用RT・**24時間超**は除外)。
+- **監視ソース**: メンション(reply案、**既定オフ=手動返信方針**)/手動MANUAL対象/Xリスト/ジャンルkeyword(既定オフ)/フォロー中(既定オフ)。絡み対象は**本人オリジナル投稿のみ**(RT・引用RT・**24時間超**は除外)。さらに**最低インプレッション(`MonitorSettings.min_impressions`、既定10000)未満の投稿は候補から除外**(twitterapi.io の `viewCount` を `view_count` として参照。取れない投稿=None は判定不能として通す。公式APIフォールバック経路は view が無いため実質このフィルタを通らない)。
+- **有名人ウォッチ(`run_celeb_once` / celeb_tick)**: 専用Xリスト(`celeb_list_id`)の有名人が **AIに言及した投稿だけ**を即検出して reply 案を作る軽量ストリーム。タイムライン巡回はせず、リストメンバーを `from:a OR from:b ...`(`CELEB_SEARCH_CHUNK=12` 人ずつに分割)× AIキーワードOR(`AI_TOPIC_KEYWORDS`)× `within_time:24h` の**検索1〜2クエリ/回**で検出(API節約)。ヒット0ならLLMを呼ばない。`MonitorCursor(stream="celeb")` を raw 全ヒットの最大IDまで前進させ、選定落ちした投稿も二度LLMにかけない。Draft既存除外・RT除外・24h窓は通常監視と同じだが、**min_impressions は適用しない**(投稿直後の素早い反応を優先=閾値免除)。候補には `note`(即時反応の狙い)を付けて `select_engagements` に渡し、1回の生成上限は `CELEB_MAX_PER_TICK=3`。自動実行は `celeb_watch_enabled`(既定OFF)でゲート、手動は Settings「今すぐチェック」/ `POST /monitor/celeb-run-once`(ジョブ化)。
 - **AIバッチ選定(`collect_engage_candidates` → `formatter.select_engagements`)**: 全有効ソースの直近24時間の候補を**1回のバッチAI判断**にまとめて渡し、「どの投稿に絡むか(分散)」「reply / quote のどちらか」「本文」までを一度に生成する(従来の直列スキャン＋投稿ごと判断は先頭アカウントがバジェットを使い切り同一アカウント偏りを生んだため廃止)。**同一アカウントは原則1件・最大2件**(プロンプト指示＋コード側でも3件目以降を破棄)。選定結果は `service.create_engage_draft_from_text` で LLM を呼ばずそのまま Draft 化(選定理由を `source_text` に `[AI選定理由]` として保持)。`run_once` の総生成数バジェット(`max_drafts_per_run`)が選定の `max_n` になる。メンション(自分宛)は従来通り個別生成・引用RTせず常に reply。
 - **絡み対象(EngageTarget)**: MANUAL(user_id 直接)/LIST(list_id を毎回メンバー展開)/GENRE(keyword 検索)/FOLLOWING(Enum はあるが poll は EngageTarget を読まず自分のフォローを直接巡回)。
 - **返信/引用生成(generate_reply / generate_quote)**: 相手投稿から AI が本文生成。返信は `_REPLY_LENGTH_BANDS` から `random.choice` で長さ帯を選び、毎回同じ長さに寄るのを防ぐ。常に1セグメント(分割しない)、140字厳守。
@@ -407,7 +411,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 - **分析(サマリ)**: 全 `DraftStatus` のステータス別下書き件数(`GET /analytics/summary`)。
 - **メディア(media)**: 画像(jpg/jpeg/png/webp/gif)最大4枚・動画(mp4/mov/m4v)1個・25MB上限。混在不可。保存は `<uuid4hex><ext>`、DB には相対パス。実際の X アップロードは投稿直前(`media_id` 失効回避)。
 - **おすすめ時間(recommended_times)**: UI 初期値用に重ならない直近 count 件のスロットを返す(`GET /schedule/recommended`)。tier は best(21時)/great(19・22時)/good(8・12・16時)。
-- **デーモントグル(auto_monitor_enabled・既定OFF)**: 絡み案の自動生成のみを UI(Settings)でオンオフ。OFF(既定)でもプロセスは止めず `monitor_tick` が即returnするだけ(API消費なし)。乱造防止のため既定OFF＝必要な時だけオンにし、終わったらオフに戻す運用。手動で1回だけ生成するなら Inbox「監視を1回実行」/ CLI `xagent monitor-once`。予約投稿の発火はこのトグルと無関係に常時動く。ニュース速報の自動生成も同じ思想で `NewsSettings.auto_news_enabled`(既定OFF・News 画面のトグル)。
+- **デーモントグル(auto_monitor_enabled・既定OFF)**: 絡み案の自動生成のみを UI(Settings)でオンオフ。OFF(既定)でもプロセスは止めず `monitor_tick` が即returnするだけ(API消費なし)。乱造防止のため既定OFF＝必要な時だけオンにし、終わったらオフに戻す運用。手動で1回だけ生成するなら Inbox「監視を1回実行」/ CLI `xagent monitor-once`。予約投稿の発火はこのトグルと無関係に常時動く。ニュース速報の自動生成も同じ思想で `NewsSettings.auto_news_enabled`(既定OFF・News 画面のトグル)、有名人ウォッチも `MonitorSettings.celeb_watch_enabled`(既定OFF・Settings のトグル)。
 - **DB容量管理(maintenance.enforce_db_capacity)**: `max_db_bytes`(既定2GB)超過時に端末状態(POSTED/REJECTED/CANCELED)のみ `created_at` 昇順で `_PURGE_BATCH=200` 件ずつ削除し VACUUM。生きた下書きは削除しない。
 - **コスト記録(cost)**: `commit` は常に呼び出し側に委ねる(下書き作成や学習と同一トランザクションで永続化)。`bill_formatter_usage` は整形器のトークン使用量をフラッシュしカウンタをリセット(二重課金防止)。両方0なら None。
 - **通知(notify)**: 承認待ちが出ると macOS 通知(`osascript`)。macOS 以外・通知不可環境では黙って no-op(例外を投げない)。
@@ -449,7 +453,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 | メソッド | パス | 用途 | エラー |
 |---|---|---|---|
-| GET | `/jobs` | **実行中**ジョブの一覧 `[{job_id, label, progress, elapsed_seconds}]`。label はジョブ種別(`monitor-run-once`/`quote-from-url`/`recast`/`news-run-once`)。画面を開き直した時の再接続用 | - |
+| GET | `/jobs` | **実行中**ジョブの一覧 `[{job_id, label, progress, elapsed_seconds}]`。label はジョブ種別(`monitor-run-once`/`quote-from-url`/`recast`/`news-run-once`/`celeb-run-once`)。画面を開き直した時の再接続用 | - |
 | GET | `/jobs/{job_id}` | ジョブ状態 `{job_id, status: running\|done\|error, progress, elapsed_seconds, result, error}` | 404(再起動でジョブ消滅) |
 
 ジョブは**プロセス内メモリ保持**(`xagent/api/jobs.py`、完了10分後に掃除)。worker 再起動で消えるが、結果の実体(下書き)は DB に入るので永続化しない。フロントは 404 を「サーバが再起動したため生成が中断されました」と表示し、一時的な接続断はポーリング継続で吸収する。あわせて未捕捉例外は `main.py` のミドルウェアが **CORS ヘッダ付き JSON 500** に変換する(Starlette 既定のプレーン500は CORSMiddleware を通らず、vite dev :5180 のクロスオリジンでは一律 Failed to fetch に化けるため)。
@@ -499,8 +503,9 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 | メソッド | パス | 用途 |
 |---|---|---|
 | POST | `/monitor/run-once` | 監視を1サイクル実行。`?limit=N` でその回だけ生成数を N 件までに絞る(乱造防止)。**ジョブ化: `{"job_id"}` を即返し `run_once` の戻りはジョブの result**(候補収集+バッチ選定で実測数分〜15分) |
+| POST | `/monitor/celeb-run-once` | 有名人ウォッチを1回実行(`run_celeb_once`)。`?limit=N` でその回の生成上限を絞る。**ジョブ化**(label=`celeb-run-once`)。result は `{candidates, reply_suggestions, quote_suggestions}`、リスト未設定なら result 内 `error` で案内 |
 | GET | `/monitor/settings` | 監視設定取得 |
-| PUT | `/monitor/settings` | 監視設定更新(None 以外のフラグのみ部分更新) |
+| PUT | `/monitor/settings` | 監視設定更新(None 以外のフラグのみ部分更新。`min_impressions`/`celeb_watch_enabled`/`celeb_list_id` 含む) |
 
 ### news(`/news`)
 
@@ -601,7 +606,7 @@ Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯�
 | **Templates** | 投稿/リプの「型」管理 | 種別ごと一覧、作成/編集/既定化(`activate`、1kind1つ)/削除。内蔵型も編集・削除可能 |
 | **Style** | 文体管理 | スタイルガイド(常時適用)保存、自分の過去投稿学習(`learn`)、アカウント学習(`learnProfile`、50/100/200件・is_self)、学習済みプロファイル一覧 |
 | **Analytics** | コスト・集計の閲覧専用 | `cost`(X API/Claude API 2カラム+内訳)、`summary`(ステータス別件数)。操作要素なし |
-| **Settings** | 監視・制限帯 | 監視ソーストグル(楽観的更新)、`max_drafts_per_run`、`auto_monitor_enabled`(絡み案の自動生成オンオフ・既定OFF)、ブラックアウト編集(保存ボタンを押すまで反映されない) |
+| **Settings** | 監視・制限帯 | 監視ソーストグル(楽観的更新)、`max_drafts_per_run`、`min_impressions`(絡み候補の最低インプレッション・onBlur保存)、`auto_monitor_enabled`(絡み案の自動生成オンオフ・既定OFF)、**有名人ウォッチカード**(`celeb_watch_enabled` トグル・既定OFF、`celeb_list_id` の設定状況表示、「今すぐチェック」=`celebRunOnceStart`→`pollJob` 進捗表示でエラー/候補0/生成N件をトースト分岐)、ブラックアウト編集(保存ボタンを押すまで反映されない) |
 | **Agent** | 静的な説明画面 | Claude Code への話しかけ方(言う言葉→やること→等価CLI)を3カテゴリで表示。API 呼び出しなし |
 
 ### 主要共通コンポーネント
@@ -673,7 +678,7 @@ CLI とほぼ対応する。差分・専用ツール:
 `run_once(session, x_client, formatter, me_user_id, max_drafts=None) -> {"reply_suggestions": replies, "quote_suggestions": quotes}` が1監視サイクル。流れは **「メンション個別処理 → 候補収集 → 1回のバッチAI選定 → Draft化」**:
 
 1. **メンション(`poll_mentions`、トグル `mentions_enabled`・既定OFF=手動で返す方針)**: 従来通り `MonitorCursor`(stream=`"mentions"`)の `since_id` で重複を防ぎ、1件ずつ `create_reply_draft` で返信案を作る(自分宛は引用RTしないので `quote_suggestions` には乗らない)。`_cap_oldest(tweets, limit)` は超過時に **id 昇順(古い順)**で先頭 `limit` 件だけ残し、カーソルを最新まで飛ばさないため新着は次サイクルで再取得される。
-2. **候補収集(`collect_engage_candidates`)**: 全有効ソース(手動MANUAL/リストLIST=トグル `manual_targets_enabled` が両方を支配、ジャンルGENRE=`keyword_search_enabled`、フォロー中=`following_enabled`)から**直近24時間(`TARGET_MAX_AGE_HOURS=24`)の本人オリジナル投稿**を集める。**since_id カーソルは使わない**(24時間窓で毎回取り直す)。除外は3段: (a)**リポスト除外(`_drop_reposts`)**=正規化辞書の `is_repost`(twitterapi.io は `retweeted_tweet`/`quoted_tweet` の有無、公式API は `referenced_tweets` の type=retweeted/quoted)＋後方互換の本文 `RT @` 始まり、(b)**既に同じ tweet を対象にした Draft があれば状態問わず除外**(REJECTED 含む=却下済みへの再生成をしない・乱造防止と重複防止を兼ねる)、(c)ソース横断の tweet_id 重複排除。候補は新しい順(id降順)に `SELECT_MAX_CANDIDATES=120` 件まで(LLM入力の安全弁)。候補には `like_count`/`retweet_count`(twitterapi.io の `_norm` が保持)も載せ、伸び始め判断の材料にする。
+2. **候補収集(`collect_engage_candidates`)**: 全有効ソース(手動MANUAL/リストLIST=トグル `manual_targets_enabled` が両方を支配、ジャンルGENRE=`keyword_search_enabled`、フォロー中=`following_enabled`)から**直近24時間(`TARGET_MAX_AGE_HOURS=24`)の本人オリジナル投稿**を集める。**since_id カーソルは使わない**(24時間窓で毎回取り直す)。除外は3段: (a)**リポスト除外(`_drop_reposts`)**=正規化辞書の `is_repost`(twitterapi.io は `retweeted_tweet`/`quoted_tweet` の有無、公式API は `referenced_tweets` の type=retweeted/quoted)＋後方互換の本文 `RT @` 始まり、(b)**既に同じ tweet を対象にした Draft があれば状態問わず除外**(REJECTED 含む=却下済みへの再生成をしない・乱造防止と重複防止を兼ねる)、(c)ソース横断の tweet_id 重複排除、(d)**最低インプレッション(`min_impressions`、既定10000)未満を除外**(`view_count` が None=判定不能の投稿は `_within_age` と同じ思想で通す)。候補は新しい順(id降順)に `SELECT_MAX_CANDIDATES=120` 件まで(LLM入力の安全弁)。候補には `like_count`/`retweet_count`(twitterapi.io の `_norm` が保持)も載せ、伸び始め判断の材料にする。
 3. **バッチAI選定(`formatter.select_engagements`)**: 候補一覧を1回のLLM呼び出し(JSONスキーマ強制)に渡し、「どの投稿に絡むか(**同一アカウントは原則1件・最大2件**=分散)」「reply / quote のどちらか(迷えば reply)」「本文(140字厳守)」「選定理由」までまとめて生成する。コード側でも検証(候補に無いID破棄・140字超破棄・kind正規化・同一アカウント3件目以降破棄・`max_n`=残バジェットで打ち切り)。
 4. **Draft化(`service.create_engage_draft_from_text`)**: 本文は生成済みなので**LLMを呼ばずに** `status=DRAFT` の下書きを作る。選定理由は `source_text` に `[AI選定理由] ...` として保持(Inboxの承認判断材料)。型を変えたいときは従来通り Inbox の切替ボタン=`recast_engage_draft`。
 
@@ -685,6 +690,16 @@ CLI とほぼ対応する。差分・専用ツール:
 - `auto_monitor_enabled` / `auto_post_enabled` は `monitor.run_once` 内では参照されない(デーモン側のティックゲート)。
 - 対象ルール(本人オリジナルのみ等)は memory `xagent-monitor-targeting-rules` に恒久記録。
 - 生成数バジェット(`max_drafts_per_run`、手動1回実行は `max_drafts` でその回限りの上限)はメンションとバッチ選定で共有する総生成数上限。
+
+### 有名人ウォッチ(`monitor.run_celeb_once`)
+
+`run_celeb_once(session, x_client, formatter, max_drafts=None, progress=None) -> {"candidates", "reply_suggestions", "quote_suggestions"}`。専用Xリスト(`celeb_list_id`)の有名人の **AI言及投稿だけ**を検索で即検出し、reply 案を作る軽量ストリーム(機能の狙いと検索式は§6)。`run_once` との差分:
+
+- **検出は検索ベース**: `get_list_members` でメンバーを取り、`_celeb_queries`(`CELEB_SEARCH_CHUNK=12` 人ずつ `from:` OR連結 × `AI_TOPIC_KEYWORDS` OR × `within_time:24h`)を `search_recent(since_id=カーソル)` で実行。タイムライン巡回をしないため **9〜12人なら検索1クエリ/回**で済む。
+- **since_id カーソルを使う**(`MonitorCursor(stream="celeb")`)。raw 全ヒットの最大IDまで前進させるため、**選定落ちした投稿も二度LLMにかけない**(`collect_engage_candidates` の24時間窓・毎回取り直しとは逆の設計)。
+- **min_impressions を適用しない**(投稿直後の素早い反応を優先=閾値免除)。RT除外・24h窓・Draft既存除外は同じ。
+- 候補に `note`(即時反応の狙い)を付けて `select_engagements` へ。1回の生成上限は `max_drafts or CELEB_MAX_PER_TICK=3`。
+- `celeb_list_id` 未設定なら例外でなく result 内 `error` で案内(ジョブを 500 にしない)。
 
 ### 最適時間スロット(`scheduler.py`)
 
@@ -717,13 +732,14 @@ override: `ensure_not_blackout(in_blackout, override, reason)` は `in_blackout 
 |---|---|---|
 | `monitor_tick()` | `auto_monitor_enabled` が OFF(既定) なら**即 return**(`XClient.from_settings` すら呼ばず API 消費ゼロ)。API常駐スケジューラに登録され、UIトグルONの時だけ実処理 | `get_me()` → `monitor.run_once(...)`。提案が1件以上なら `notify` で承認待ち通知。下書きのみ生成・自動投稿しない |
 | `news_tick()` | `auto_news_enabled` が OFF(既定) なら**即 return**(XNewsBot の DB も LLM も触らない) | `news.run_news_once(...)`。新ダイジェスト検知で速報下書きを生成(ダイジェスト連動)、1件以上作れば `notify`。`NewsSourceUnavailable` は warning ログのみ(デーモンを止めない) |
+| `celeb_tick()` | `celeb_watch_enabled` が OFF(既定) **または `celeb_list_id` 未設定**なら**即 return**(API消費ゼロ) | `monitor.run_celeb_once(...)`。有名人のAI言及を検索検出して reply 案を生成、1件以上作れば `notify`。`XClientError` は warning ログのみ |
 | `queue_tick()` | ゲートなし(**常時実行**。「予約投稿は止めない」方針) | 発火のたびモジュール変数 `_last_queue_tick_at`(naive UTC)を更新(X資格情報の有無に関わらず先に。`/status` のハートビート)→ `process_due_queue(...)` |
 
 緊急停止の責務分担: 全投稿停止は `config.posting_enabled`、個別の制限帯/頻度ガードは `process_due_queue`→`post_draft`。`auto_post_enabled` は `queue_tick` のゲートに**使われていない**(未使用)。
 
 スケジューラ稼働の可視化: `lifespan` は `app.state.scheduler` に `BackgroundScheduler` を保持し、`queue` ジョブを `next_run_time=now` で登録して起動直後に1回発火させる(ハートビート即時化)。`GET /status` がこのハートビートとジョブの `next_run_time` から `healthy` を判定し、フロント App のサイドバーで「予約スケジューラ 稼働中/停止?」バッジに表示する(起動し忘れ・ハングをUIで検知)。
 
-実運用構成: API プロセスの `lifespan` 内で `BackgroundScheduler(timezone="UTC")` が `queue`(60秒)・`monitor`(180秒、`max_instances=1`, `coalesce=True`)・`news`(600秒、`max_instances=1`, `coalesce=True`)を登録。monitor は `auto_monitor_enabled`、news は `auto_news_enabled`(いずれも既定OFF)で内部ゲートされ、UIトグルONの時だけ実処理する。`daemon.run`(`BlockingScheduler` 版、CLI `xagent daemon`)は別経路で、launchd 常駐構成では実際に回るのは内蔵スケジューラ。
+実運用構成: API プロセスの `lifespan` 内で `BackgroundScheduler(timezone="UTC")` が `queue`(60秒)・`monitor`(180秒、`max_instances=1`, `coalesce=True`)・`news`(600秒、`max_instances=1`, `coalesce=True`)・`celeb`(600秒=`celeb_interval_seconds`、`max_instances=1`, `coalesce=True`)を登録。monitor は `auto_monitor_enabled`、news は `auto_news_enabled`、celeb は `celeb_watch_enabled`(いずれも既定OFF)で内部ゲートされ、UIトグルONの時だけ実処理する。`daemon.run`(`BlockingScheduler` 版、CLI `xagent daemon`)は別経路で、launchd 常駐構成では実際に回るのは内蔵スケジューラ。
 
 ---
 
@@ -894,7 +910,7 @@ SQLite `xagent.db`(`DB_PATH` 既定)。容量上限 `MAX_DB_BYTES`(既定2GB)超
 | `API_TOKEN` | None | 設定時に全ルータ+`/me` `/status` で `X-API-Token` 必須(開放は `/health` と `/media/files` のみ)。空ならローカル開放 |
 | `TIMEZONE` | `Asia/Tokyo` | 運用タイムゾーン |
 
-設定の二重制御: 投稿の緊急停止は `POSTING_ENABLED`、絡み案の自動生成のオンオフは `MonitorSettings.auto_monitor_enabled`、ニュース速報の自動生成は `NewsSettings.auto_news_enabled`(いずれも既定OFF・UIトグル)。1日上限は `MAX_POSTS_PER_DAY`(自然)と `HARD_CAP_POSTS_PER_DAY`(ハード)の二段。
+設定の二重制御: 投稿の緊急停止は `POSTING_ENABLED`、絡み案の自動生成のオンオフは `MonitorSettings.auto_monitor_enabled`、ニュース速報の自動生成は `NewsSettings.auto_news_enabled`、有名人ウォッチは `MonitorSettings.celeb_watch_enabled`(いずれも既定OFF・UIトグル)。1日上限は `MAX_POSTS_PER_DAY`(自然)と `HARD_CAP_POSTS_PER_DAY`(ハード)の二段。
 
 ## 付録B. パッケージング・依存関係
 

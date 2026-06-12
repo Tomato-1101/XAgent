@@ -192,6 +192,14 @@ class MonitorSettings(SQLModel, table=True):
     auto_post_enabled: bool = True
     # 1監視サイクルで作る下書きの総数上限。一気に生成しすぎてAPIを圧迫しないための安全弁。
     max_drafts_per_run: int = 10
+    # 絡み候補の最低インプレッション。これ未満の投稿には絡まない(伸びていない投稿への
+    # リプは露出が取れないため)。view数が取得できない投稿は判定不能として通す。
+    min_impressions: int = 10000
+    # 有名人ウォッチ: celeb_list_id のXリストのメンバーが AI について投稿したら即絡み案を作る。
+    # 検出は検索1〜2クエリ/回(タイムライン巡回なし・API節約)。既定OFF。
+    # 有名人は min_impressions の対象外(投稿直後の素早い反応を優先)。
+    celeb_watch_enabled: bool = False
+    celeb_list_id: str | None = None
     updated_at: datetime = Field(default_factory=_utcnow)
 
 

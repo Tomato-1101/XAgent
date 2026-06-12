@@ -316,7 +316,8 @@ class Formatter:
 選定ルール:
 - 自分が本当に返信したいと思う投稿だけ選ぶ。無理に{max_n}件埋めない(良い候補が少なければ少なく返す)。
 - 特定のアカウントに偏らせない。同一アカウントからは原則1件、多くても2件まで。
-- 会話が生まれそうな投稿、伸び始めの投稿、いいね/RTが付き始めている投稿を優先する。
+- 会話が生まれそうな投稿、伸び始めの投稿、いいね/RT/閲覧数(view_count)が付き始めている投稿を優先する。
+- note が付いた候補はその背景・狙いを優先的に考慮する。
 
 reply / quote の判断基準:
 - reply: 相手のスレッドに短い共感・反応で割り込んで露出を取る方が自然な投稿(会話的・あるある・伸び始めのバズへの相乗り)。これが主力・デフォルト。迷ったら reply。
@@ -339,7 +340,10 @@ reply / quote の判断基準:
                 "created_at": str(c.get("created_at") or ""),
                 "like_count": c.get("like_count", 0),
                 "retweet_count": c.get("retweet_count", 0),
+                "view_count": c.get("view_count", 0),
             }
+            if c.get("note"):
+                item["note"] = c["note"]
             lines.append(json.dumps(item, ensure_ascii=False))
         user = "候補投稿一覧(1行1件のJSON):\n" + "\n".join(lines)
         # バッチ選定は9万トークン超の入力で既定240秒を超えることがあるため専用の長いタイムアウト

@@ -15,7 +15,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from .db import get_session, init_db
 from .formatter import Formatter
-from .monitor import get_monitor_settings, run_once
+from .monitor import get_monitor_settings, run_celeb_once, run_once
 from .notify import notify
 from .scheduler import process_due_queue
 from .x_client import XClient, XClientError
@@ -50,6 +50,29 @@ def monitor_tick() -> None:
         log.warning("monitor_tick: X資格情報未設定 (%s)", e)
     except Exception:
         log.exception("monitor_tick failed")
+
+
+def celeb_tick() -> None:
+    """有名人ウォッチ: リストの有名人がAIについて投稿したら即絡み案を生成する。
+
+    celeb_watch_enabled(既定OFF)で制御。検出は検索1〜2クエリ/回(タイムライン巡回なし)で、
+    ヒットが無ければLLMを呼ばない(API節約)。下書きのみ生成・自動投稿しない。
+    """
+    try:
+        with get_session() as s:
+            cfg = get_monitor_settings(s)
+            if not cfg.celeb_watch_enabled or not cfg.celeb_list_id:
+                return
+            x = XClient.from_settings()
+            res = run_celeb_once(s, x, Formatter())
+            total = res.get("reply_suggestions", 0) + res.get("quote_suggestions", 0)
+            if total:
+                notify("XAgent: 有名人のAI投稿に絡み案", f"{total}件の下書きを生成しました")
+                log.info("celeb_tick: %s", res)
+    except XClientError as e:
+        log.warning("celeb_tick: X資格情報未設定 (%s)", e)
+    except Exception:
+        log.exception("celeb_tick failed")
 
 
 def news_tick() -> None:

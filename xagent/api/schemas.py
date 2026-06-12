@@ -145,6 +145,9 @@ class MonitorSettingsRequest(BaseModel):
     auto_monitor_enabled: bool | None = None  # デーモン: 自動監視(絡み案生成)
     auto_post_enabled: bool | None = None      # デーモン: 予約分の自動投稿
     max_drafts_per_run: int | None = None  # 1監視サイクルの総生成数上限
+    min_impressions: int | None = None     # 絡み候補の最低インプレッション(未満は対象外)
+    celeb_watch_enabled: bool | None = None  # 有名人ウォッチ(AI言及の即時検出)のオン/オフ
+    celeb_list_id: str | None = None         # 有名人ウォッチ対象のXリストID
 
 
 class NewsSettingsRequest(BaseModel):

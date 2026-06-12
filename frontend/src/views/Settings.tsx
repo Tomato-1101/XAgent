@@ -20,6 +20,8 @@ export default function Settings() {
 
   const [bo, setBo] = useState<BlackoutSettings | null>(null);
   const [boSaving, setBoSaving] = useState(false);
+  const [celebRunning, setCelebRunning] = useState(false);
+  const [celebStatus, setCelebStatus] = useState<string | null>(null);
   const toast = useToast();
 
   useEffect(() => {
@@ -42,18 +44,53 @@ export default function Settings() {
     }
   }
 
-  async function saveMax(n: number) {
+  async function saveNum(key: "max_drafts_per_run" | "min_impressions", n: number) {
     if (!settings) return;
     const val = Math.max(0, Math.floor(n) || 0);
     setSaving(true);
     setError(null);
     try {
-      setSettings(await api.putMonitorSettings({ max_drafts_per_run: val }));
+      setSettings(await api.putMonitorSettings({ [key]: val }));
     } catch (e) {
       setError(String(e));
       api.getMonitorSettings().then(setSettings).catch(() => {});
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function runCelebOnce() {
+    setCelebRunning(true);
+    setCelebStatus("開始しています…");
+    try {
+      const { job_id } = await api.celebRunOnceStart();
+      const res = await api.pollJob<{
+        candidates: number;
+        reply_suggestions: number;
+        quote_suggestions: number;
+        error?: string;
+      }>(job_id, (msg, sec) => {
+        const m = Math.floor(sec / 60);
+        setCelebStatus(`${msg || "実行中"}（経過 ${m > 0 ? `${m}分` : ""}${sec % 60}秒）`);
+      });
+      if (res.error) {
+        toast({ tone: "error", message: res.error });
+      } else if (res.candidates === 0) {
+        toast({ tone: "info", message: "有名人の新しいAI言及投稿はありませんでした。" });
+      } else {
+        const total = res.reply_suggestions + res.quote_suggestions;
+        toast({
+          tone: "success",
+          message: total
+            ? `絡み案を${total}件生成しました（Inboxで確認できます）。`
+            : `候補${res.candidates}件を確認しましたが、絡む価値が高い投稿はありませんでした。`,
+        });
+      }
+    } catch (e) {
+      toast({ tone: "error", message: `有名人ウォッチに失敗: ${String(e)}` });
+    } finally {
+      setCelebRunning(false);
+      setCelebStatus(null);
     }
   }
 
@@ -136,7 +173,24 @@ export default function Settings() {
                 className="w-24 shrink-0"
                 defaultValue={settings.max_drafts_per_run}
                 disabled={saving}
-                onBlur={(e) => saveMax(Number(e.target.value))}
+                onBlur={(e) => saveNum("max_drafts_per_run", Number(e.target.value))}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3 pt-2">
+              <span className="text-sm">
+                <span className="text-zinc-200">最低インプレッション</span>
+                <span className="ml-2 text-xs text-zinc-500">
+                  これ未満の閲覧数の投稿には絡まない（伸びていない投稿へのリプは露出が取れないため）。有名人ウォッチは対象外。
+                </span>
+              </span>
+              <Input
+                type="number"
+                min={0}
+                step={1000}
+                className="w-28 shrink-0"
+                defaultValue={settings.min_impressions}
+                disabled={saving}
+                onBlur={(e) => saveNum("min_impressions", Number(e.target.value))}
               />
             </div>
           </>
@@ -166,6 +220,42 @@ export default function Settings() {
               手動で1回だけ生成するなら Inbox の「監視を1回実行」。
               予約投稿の発火はこのスイッチと無関係に常時動きます（全投稿の緊急停止はサーバ側の posting_enabled）。
             </p>
+          </>
+        ) : (
+          <div className="text-sm text-zinc-500">読み込み中…</div>
+        )}
+      </Card>
+
+      {/* 有名人ウォッチ: リストの有名人がAIについて投稿したら即絡み案(検索ベースの軽量検出) */}
+      <Card className="space-y-1">
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-zinc-400">有名人ウォッチ（AI言及の即時検出）</div>
+          {saving && <Spinner />}
+        </div>
+        {settings ? (
+          <>
+            <Switch
+              label="有名人のAI投稿を自動検出する"
+              hint="リストの有名人がAIについて投稿したら数分以内に絡み案を下書き生成（既定オフ・下書きのみ・自動投稿はしない）"
+              checked={Boolean(settings.celeb_watch_enabled)}
+              disabled={saving}
+              onChange={(v) => toggle("celeb_watch_enabled", v)}
+            />
+            <p className="pt-1 text-xs text-zinc-500">
+              検出は検索クエリ1〜2回/サイクルの軽量方式（タイムライン巡回なし）。AIに言及した投稿が
+              見つかった時だけ生成AIが動きます。有名人はインプレッション下限の対象外（投稿直後に反応するため）。
+              対象リスト: {settings.celeb_list_id ? (
+                <span className="text-zinc-300">設定済み（ID: {settings.celeb_list_id}）</span>
+              ) : (
+                <span className="text-amber-400">未設定（Xリスト「有名人ウォッチ」を作成して設定してください）</span>
+              )}
+            </p>
+            <div className="flex items-center gap-3 pt-2">
+              <Button size="sm" variant="outline" onClick={runCelebOnce} disabled={celebRunning || !settings.celeb_list_id}>
+                {celebRunning ? <Spinner /> : "今すぐチェック"}
+              </Button>
+              {celebStatus && <span className="text-xs text-zinc-400">{celebStatus}</span>}
+            </div>
           </>
         ) : (
           <div className="text-sm text-zinc-500">読み込み中…</div>

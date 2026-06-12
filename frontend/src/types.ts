@@ -111,6 +111,9 @@ export interface MonitorSettings {
   auto_monitor_enabled: boolean; // デーモン: 自動監視(絡み案生成)
   auto_post_enabled: boolean; // デーモン: 予約分の自動投稿
   max_drafts_per_run: number; // 1監視サイクルの総生成数上限
+  min_impressions: number; // 絡み候補の最低インプレッション(未満は対象外)
+  celeb_watch_enabled: boolean; // 有名人ウォッチ(AI言及の即時検出・既定OFF)
+  celeb_list_id?: string | null; // 有名人ウォッチ対象のXリストID
   updated_at?: string;
 }
 

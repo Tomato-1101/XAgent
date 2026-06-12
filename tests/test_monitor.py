@@ -300,3 +300,116 @@ def test_within_age_passes_when_created_at_missing(session, fake_formatter):
     """created_at が無いツイートは判定不能として通す(従来挙動・テスト互換)。"""
     fx = FakeXClient(mentions=[{"id": "9", "text": "日時なし", "author_id": "u1"}])
     assert monitor.poll_mentions(session, fx, fake_formatter, me_user_id="me") == (1, 0)
+
+
+# --- 最低インプレッション(min_impressions)フィルタ ---------------------------
+
+def test_collect_filters_low_impressions(session, fake_formatter):
+    """view数(インプレッション)が min_impressions 未満の投稿は候補から外す。
+
+    view数が取れない投稿(公式APIフォールバック経路・テスト互換)は判定不能として通す。
+    """
+    session.add(EngageTarget(kind=TargetKind.MANUAL, handle="famous", user_id="u9", active=True))
+    session.commit()
+    fx = FakeXClient(timelines={"u9": [
+        {"id": "1", "text": "伸びてない", "author_id": "u9", "view_count": 500},
+        {"id": "2", "text": "伸びてる", "author_id": "u9", "view_count": 25000},
+        {"id": "3", "text": "view不明", "author_id": "u9"},
+    ]})
+    cands = monitor.collect_engage_candidates(session, fx, me_user_id="me")
+    assert {c["tweet_id"] for c in cands} == {"2", "3"}
+    # view_count はAIの選定材料として候補に載る
+    assert next(c for c in cands if c["tweet_id"] == "2")["view_count"] == 25000
+
+
+def test_min_impressions_setting_update(session):
+    """min_impressions は既定10000、set_monitor_settings で変更できる(負値は0に丸め)。"""
+    cfg = monitor.get_monitor_settings(session)
+    assert cfg.min_impressions == 10000
+    cfg = monitor.set_monitor_settings(session, min_impressions=0)
+    assert cfg.min_impressions == 0
+    # 0なら全件通る
+    session.add(EngageTarget(kind=TargetKind.MANUAL, handle="famous", user_id="u9", active=True))
+    session.commit()
+    fx = FakeXClient(timelines={"u9": [
+        {"id": "1", "text": "p", "author_id": "u9", "view_count": 10},
+    ]})
+    assert len(monitor.collect_engage_candidates(session, fx, me_user_id="me")) == 1
+
+
+# --- 有名人ウォッチ(run_celeb_once) ------------------------------------------
+
+def _celeb_setup(session, list_members, searches):
+    """celeb_list_id を設定し、リストメンバーと検索結果を持つ FakeXClient を返す。"""
+    monitor.set_monitor_settings(session, celeb_list_id="L9")
+    return FakeXClient(list_members={"L9": list_members}, searches=searches)
+
+
+def test_celeb_queries_chunking():
+    """from: はチャンク分割し、AIキーワードのOR条件と24時間窓を含む。"""
+    qs = monitor._celeb_queries([f"user{i}" for i in range(monitor.CELEB_SEARCH_CHUNK + 1)])
+    assert len(qs) == 2
+    assert "from:user0" in qs[0] and f"from:user{monitor.CELEB_SEARCH_CHUNK}" in qs[1]
+    assert "AI OR" in qs[0] and "within_time:24h" in qs[0]
+
+
+def test_celeb_run_once_creates_reply_draft(session, fake_formatter):
+    """有名人のAI言及投稿が検索で見つかると絡み案(reply)の下書きを作る。"""
+    q = monitor._celeb_queries(["takapon"])[0]
+    fx = _celeb_setup(
+        session, [{"id": "u1", "username": "takapon"}],
+        {q: [{"id": "501", "text": "AIで会社が変わる", "author_id": "u1",
+              "author_handle": "takapon", "view_count": 100}]},
+    )
+    res = monitor.run_celeb_once(session, fx, fake_formatter)
+    assert res == {"candidates": 1, "reply_suggestions": 1, "quote_suggestions": 0}
+    d = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).one()
+    assert d.target_tweet_id == "501"
+    assert d.target_handle == "takapon"
+    # 有名人は min_impressions(既定10000)の対象外: view_count=100 でも候補になる
+    # 候補には note(有名人である旨)が付与され、選定上限は CELEB_MAX_PER_TICK
+    call = fake_formatter.select_calls[0]
+    assert call["max_n"] == monitor.CELEB_MAX_PER_TICK
+    assert "有名人" in call["candidates"][0]["note"]
+
+
+def test_celeb_run_once_advances_cursor_and_no_duplicate(session, fake_formatter):
+    """カーソル(stream=celeb)が進み、既にDraftがある投稿は再生成しない(LLMも呼ばない)。"""
+    q = monitor._celeb_queries(["takapon"])[0]
+    fx = _celeb_setup(
+        session, [{"id": "u1", "username": "takapon"}],
+        {q: [{"id": "501", "text": "AIすごい", "author_id": "u1", "author_handle": "takapon"}]},
+    )
+    monitor.run_celeb_once(session, fx, fake_formatter)
+    cur = session.exec(select(MonitorCursor).where(MonitorCursor.stream == "celeb")).one()
+    assert cur.last_seen_id == "501"
+    # 2回目: 同じ検索結果でも既存Draftにより候補0件 → LLMは呼ばれない
+    f2 = type(fake_formatter)()
+    res2 = monitor.run_celeb_once(session, fx, f2)
+    assert res2["candidates"] == 0
+    assert f2.select_calls == []
+
+
+def test_celeb_run_once_drops_reposts_and_old(session, fake_formatter):
+    """有名人ウォッチでもRT・引用RT・24時間超は対象外(本人オリジナルの新規のみ)。"""
+    now = datetime.now(timezone.utc)
+    q = monitor._celeb_queries(["takapon"])[0]
+    fx = _celeb_setup(
+        session, [{"id": "u1", "username": "takapon"}],
+        {q: [
+            {"id": "1", "text": "RT @x: AI", "author_id": "u1", "created_at": now},
+            {"id": "2", "text": "AI引用", "author_id": "u1", "created_at": now, "is_repost": True},
+            {"id": "3", "text": "古いAI話", "author_id": "u1", "created_at": now - timedelta(hours=30)},
+            {"id": "4", "text": "AIのオリジナル新規", "author_id": "u1", "created_at": now},
+        ]},
+    )
+    res = monitor.run_celeb_once(session, fx, fake_formatter)
+    assert res["candidates"] == 1
+    assert fake_formatter.select_calls[0]["candidates"][0]["tweet_id"] == "4"
+
+
+def test_celeb_run_once_without_list_returns_error(session, fake_formatter):
+    """celeb_list_id 未設定なら何もせず案内を返す(例外にしない)。"""
+    res = monitor.run_celeb_once(session, FakeXClient(), fake_formatter)
+    assert res["candidates"] == 0
+    assert "未設定" in res["error"]

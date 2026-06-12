@@ -55,6 +55,7 @@ def test_get_tweet_normalizes_and_sends_key(monkeypatch):
         "is_repost": False,
         "like_count": 0,
         "retweet_count": 0,
+        "view_count": 0,
     }
     assert seen["key"] == "test-key"
     assert seen["path"] == "/twitter/tweets"

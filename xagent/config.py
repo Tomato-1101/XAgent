@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True    # Falseで予約キューの自動処理を止める(手動投稿は可)
     scheduler_interval_seconds: int = 60  # 予約キューを点検する間隔
     monitor_interval_seconds: int = 180  # 絡み案の自動生成(monitor_tick)を回す間隔。実行可否は auto_monitor_enabled で制御
+    celeb_interval_seconds: int = 600  # 有名人ウォッチ(celeb_tick)の間隔。実行可否は celeb_watch_enabled で制御
 
     # --- Web API (任意の認証) ---
     api_token: str | None = None      # 設定時はFastAPIの書込系で X-API-Token を必須にする
