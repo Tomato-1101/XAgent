@@ -50,8 +50,26 @@ function schedBadge(s: SchedulerStatus): { tone: "green" | "red" | "amber"; labe
   return { tone: "red", label: "予約スケジューラ 停止?" };
 }
 
+// 現在の画面はURLハッシュ(#inbox 等)に持つ。リロード・新ビルド検知の自動リロードでも
+// 画面が Compose に戻らず、スマホのブックマークやタブ復帰でも今の画面に留まれる。
+function viewFromHash(): View {
+  const h = window.location.hash.replace(/^#\/?/, "");
+  return NAV.some((n) => n.key === h) ? (h as View) : "compose";
+}
+
 export default function App() {
-  const [view, setView] = useState<View>("compose");
+  const [view, setView] = useState<View>(viewFromHash);
+
+  useEffect(() => {
+    window.location.hash = view;
+  }, [view]);
+
+  // ブラウザの戻る/進む(ハッシュ変更)にも画面を追従させる
+  useEffect(() => {
+    const onHash = () => setView(viewFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const [online, setOnline] = useState<boolean | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [sched, setSched] = useState<SchedulerStatus | null>(null);
