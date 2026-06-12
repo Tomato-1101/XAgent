@@ -15,7 +15,14 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from .db import get_session, init_db
 from .formatter import Formatter
-from .monitor import get_monitor_settings, run_celeb_once, run_once
+from .monitor import (
+    BUZZ_BACKLOG_MAX,
+    engage_backlog_count,
+    get_monitor_settings,
+    run_buzz_once,
+    run_celeb_once,
+    run_once,
+)
 from .notify import notify
 from .scheduler import process_due_queue
 from .x_client import XClient, XClientError
@@ -73,6 +80,34 @@ def celeb_tick() -> None:
         log.warning("celeb_tick: X資格情報未設定 (%s)", e)
     except Exception:
         log.exception("celeb_tick failed")
+
+
+def buzz_tick() -> None:
+    """バズウォッチ: いいね数の実績(min_faves検索)で「既にバズった投稿」を網羅的に拾い、
+    絡み案を生成する。buzz_watch_enabled(既定OFF)で制御。
+
+    自動tickは承認待ちの絡み案が BUZZ_BACKLOG_MAX 件以上溜まっていたら生成しない
+    (承認が追いつかないまま乱造しない)。手動の「今すぐチェック」はこのガードを通らない。
+    """
+    try:
+        with get_session() as s:
+            cfg = get_monitor_settings(s)
+            if not cfg.buzz_watch_enabled:
+                return
+            backlog = engage_backlog_count(s)
+            if backlog >= BUZZ_BACKLOG_MAX:
+                log.info("buzz_tick: 承認待ち%s件のためスキップ(乱造ガード)", backlog)
+                return
+            x = XClient.from_settings()
+            res = run_buzz_once(s, x, Formatter())
+            total = res.get("reply_suggestions", 0) + res.get("quote_suggestions", 0)
+            if total:
+                notify("XAgent: バズ投稿に絡み案", f"{total}件の下書きを生成しました")
+                log.info("buzz_tick: %s", res)
+    except XClientError as e:
+        log.warning("buzz_tick: X資格情報未設定 (%s)", e)
+    except Exception:
+        log.exception("buzz_tick failed")
 
 
 def news_tick() -> None:

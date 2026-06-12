@@ -19,6 +19,7 @@ from .formatter import Formatter
 from .models import (
     Draft,
     DraftKind,
+    DraftStatus,
     EngageTarget,
     MonitorCursor,
     MonitorSettings,
@@ -36,6 +37,10 @@ SELECT_MAX_CANDIDATES = 120  # AIバッチ選定に渡す候補数の安全弁(�
 
 CELEB_MAX_PER_TICK = 3       # 有名人ウォッチ1回で作る絡み案の上限(乱造防止)
 CELEB_SEARCH_CHUNK = 12      # 1検索クエリに入れる from: の数(クエリ長の安全弁)
+
+BUZZ_MAX_PER_TICK = 3        # バズウォッチ1回で作る絡み案の上限(乱造防止)
+BUZZ_WINDOW_HOURS = 6        # バズ検索の時間窓。Latest順×100件上限のため実効は直近数時間
+BUZZ_BACKLOG_MAX = 30        # 承認待ち絡み案がこれ以上溜まっていたら自動tickは生成しない
 # 有名人の「AIについての投稿」を検索で拾うキーワード(X検索のOR条件)。
 # 検索クエリ側で絞るのでタイムライン全件を読まず、ヒットが無ければLLMも呼ばない(API節約)。
 AI_TOPIC_KEYWORDS = (
@@ -62,7 +67,7 @@ def set_monitor_settings(session: Session, **flags) -> MonitorSettings:
         if not hasattr(row, k):
             continue
         if (
-            k in ("max_drafts_per_run", "min_impressions")
+            k in ("max_drafts_per_run", "min_impressions", "buzz_min_faves")
             and isinstance(v, int)
             and not isinstance(v, bool)
         ):
@@ -457,5 +462,90 @@ def run_celeb_once(
         cur.last_seen_id = new_max
         session.add(cur)
     session.commit()
+    return {"candidates": len(candidates), "reply_suggestions": replies,
+            "quote_suggestions": quotes}
+
+
+def engage_backlog_count(session: Session) -> int:
+    """承認待ち(DRAFT)の絡み案(reply/quote)の件数。自動tickの乱造ガードに使う。"""
+    return len(
+        session.exec(
+            select(Draft.id).where(
+                Draft.status == DraftStatus.DRAFT,
+                Draft.kind.in_((DraftKind.REPLY, DraftKind.QUOTE)),  # type: ignore[attr-defined]
+            )
+        ).all()
+    )
+
+
+def run_buzz_once(
+    session: Session, x_client: XClient, formatter: Formatter,
+    max_drafts: int | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> dict:
+    """バズウォッチを1回実行: アカウントを問わず「既にバズった投稿」に絡み案を作る。
+
+    バズの予測はしない。X検索の min_faves 演算子で「いいねが buzz_min_faves 以上付いた」
+    という実績だけを条件に検索1クエリで網羅的に拾う(Latest順・最大100件)。since_id カーソルは
+    使わない: バズ投稿は作成後しばらくして閾値を超えるため、作成ID基準のカーソルでは
+    「後から閾値を超えた投稿」を全て取りこぼす。重複防止は既存Draft除外(状態問わず)のみ。
+    どれに・何と絡むかの判断はバッチAI選定(select_engagements)に委ね、公式アカウントの告知や
+    ファンダム向け定常投稿など「部外者のリプが浮く投稿」はそこで落とす。
+    下書きを作るだけで投稿しない(人間承認必須)。
+    """
+    note = progress or (lambda m: None)
+    cfg = get_monitor_settings(session)
+    query = f"min_faves:{cfg.buzz_min_faves} lang:ja within_time:{BUZZ_WINDOW_HOURS}h -filter:replies"
+    note(f"バズ投稿を検索中(いいね{cfg.buzz_min_faves}以上・{BUZZ_WINDOW_HOURS}時間以内)")
+    raw = x_client.search_recent(query)
+    existing = {
+        tid
+        for tid in session.exec(
+            select(Draft.target_tweet_id).where(Draft.target_tweet_id != None)  # noqa: E711
+        ).all()
+        if tid
+    }
+    seen: set[str] = set()
+    candidates: list[dict] = []
+    for t in _within_age(_drop_reposts(raw), max_age_hours=BUZZ_WINDOW_HOURS):
+        tid = str(t.get("id", ""))
+        if not tid or tid in seen or tid in existing:
+            continue
+        seen.add(tid)
+        c = _candidate(t, None)
+        c["note"] = (
+            "バズ投稿(高エンゲージ実績)。リプ欄上位に入って認知を取る狙い。"
+            "公式アカウントの告知・ファンダム向け定常投稿・部外者のリプが浮く話題は選ばない。"
+        )
+        candidates.append(c)
+    replies = 0
+    quotes = 0
+    budget = BUZZ_MAX_PER_TICK if max_drafts is None else max(0, int(max_drafts))
+    if candidates and budget > 0:
+        note(f"AIが選定と本文生成中: 候補{len(candidates)}件から最大{budget}件")
+        selections = formatter.select_engagements(
+            candidates,
+            budget,
+            style_guide=active_style_guide(session),
+            reply_playbook=templates_mod.active_body(session, TemplateKind.REPLY),
+            quote_playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
+        )
+        for i, s in enumerate(selections):
+            note(f"下書き作成中 {i + 1}/{len(selections)}件")
+            cand = s["candidate"]
+            kind = DraftKind.QUOTE if s["kind"] == "quote" else DraftKind.REPLY
+            create_engage_draft_from_text(
+                session, kind, s["tweet_id"], s["text"],
+                target_text=cand.get("text", ""),
+                target_handle=cand.get("handle"),
+                target_created_at=cand.get("created_at"),
+                reason=s.get("reason", ""),
+            )
+            if kind == DraftKind.QUOTE:
+                quotes += 1
+            else:
+                replies += 1
+        bill_formatter_usage(session, formatter, note="buzz-select")
+        session.commit()
     return {"candidates": len(candidates), "reply_suggestions": replies,
             "quote_suggestions": quotes}

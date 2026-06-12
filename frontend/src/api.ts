@@ -322,6 +322,9 @@ export const api = {
   // 有名人ウォッチを1回実行(検索1〜2クエリ+ヒット時のみAI生成)。ジョブ開始のみ(追跡は pollJob)。
   celebRunOnceStart: () =>
     req<{ job_id: string }>("/monitor/celeb-run-once", { method: "POST" }),
+  // バズウォッチを1回実行(min_faves検索1クエリ+ヒット時のみAI生成)。ジョブ開始のみ(追跡は pollJob)。
+  buzzRunOnceStart: () =>
+    req<{ job_id: string }>("/monitor/buzz-run-once", { method: "POST" }),
   getMonitorSettings: () => req<MonitorSettings>("/monitor/settings"),
   putMonitorSettings: (flags: Partial<MonitorSettings>) =>
     req<MonitorSettings>("/monitor/settings", {

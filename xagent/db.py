@@ -48,6 +48,8 @@ _ADDED_COLUMNS = {
         ("min_impressions", "INTEGER", "DEFAULT 10000"),
         ("celeb_watch_enabled", "BOOLEAN", "DEFAULT 0"),
         ("celeb_list_id", "VARCHAR", ""),
+        ("buzz_watch_enabled", "BOOLEAN", "DEFAULT 0"),
+        ("buzz_min_faves", "INTEGER", "DEFAULT 3000"),
     ],
     "engagetarget": [
         ("list_id", "VARCHAR", ""),

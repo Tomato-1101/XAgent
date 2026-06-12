@@ -148,6 +148,8 @@ class MonitorSettingsRequest(BaseModel):
     min_impressions: int | None = None     # 絡み候補の最低インプレッション(未満は対象外)
     celeb_watch_enabled: bool | None = None  # 有名人ウォッチ(AI言及の即時検出)のオン/オフ
     celeb_list_id: str | None = None         # 有名人ウォッチ対象のXリストID
+    buzz_watch_enabled: bool | None = None   # バズウォッチ(min_faves検索の網羅検出)のオン/オフ
+    buzz_min_faves: int | None = None        # バズ判定のいいね数しきい値
 
 
 class NewsSettingsRequest(BaseModel):

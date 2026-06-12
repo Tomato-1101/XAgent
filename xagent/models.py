@@ -200,6 +200,10 @@ class MonitorSettings(SQLModel, table=True):
     # 有名人は min_impressions の対象外(投稿直後の素早い反応を優先)。
     celeb_watch_enabled: bool = False
     celeb_list_id: str | None = None
+    # バズウォッチ: アカウントを問わず「既にバズった投稿」(min_faves検索)を網羅的に拾い
+    # 絡み案を作る。バズ予測はせず、付いたいいね数という実績だけで機械的に検出する。既定OFF。
+    buzz_watch_enabled: bool = False
+    buzz_min_faves: int = 3000
     updated_at: datetime = Field(default_factory=_utcnow)
 
 

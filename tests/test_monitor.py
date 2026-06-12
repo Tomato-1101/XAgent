@@ -413,3 +413,79 @@ def test_celeb_run_once_without_list_returns_error(session, fake_formatter):
     res = monitor.run_celeb_once(session, FakeXClient(), fake_formatter)
     assert res["candidates"] == 0
     assert "未設定" in res["error"]
+
+
+# --- バズウォッチ(run_buzz_once) ----------------------------------------------
+
+def _buzz_query(session):
+    cfg = monitor.get_monitor_settings(session)
+    return (
+        f"min_faves:{cfg.buzz_min_faves} lang:ja"
+        f" within_time:{monitor.BUZZ_WINDOW_HOURS}h -filter:replies"
+    )
+
+
+def test_buzz_settings_default_and_update(session):
+    """バズウォッチは既定OFF・しきい値3000。set_monitor_settings で更新できる。"""
+    cfg = monitor.get_monitor_settings(session)
+    assert cfg.buzz_watch_enabled is False
+    assert cfg.buzz_min_faves == 3000
+    cfg = monitor.set_monitor_settings(session, buzz_watch_enabled=True, buzz_min_faves=5000)
+    assert cfg.buzz_watch_enabled is True
+    assert cfg.buzz_min_faves == 5000
+
+
+def test_buzz_run_once_creates_drafts(session, fake_formatter):
+    """min_faves検索のヒットからAI選定で絡み案を作る(しきい値設定がクエリに反映される)。"""
+    monitor.set_monitor_settings(session, buzz_min_faves=5000)
+    fx = FakeXClient(searches={_buzz_query(session): [
+        {"id": "601", "text": "とんでもないバズ投稿", "author_id": "u1",
+         "author_handle": "someone", "like_count": 8000, "view_count": 500000},
+    ]})
+    res = monitor.run_buzz_once(session, fx, fake_formatter)
+    assert res == {"candidates": 1, "reply_suggestions": 1, "quote_suggestions": 0}
+    d = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).one()
+    assert d.target_tweet_id == "601"
+    call = fake_formatter.select_calls[0]
+    assert call["max_n"] == monitor.BUZZ_MAX_PER_TICK
+    assert "バズ" in call["candidates"][0]["note"]
+
+
+def test_buzz_run_once_excludes_existing_drafts(session, fake_formatter):
+    """既にDraftがある投稿は再生成しない(候補0件ならLLMも呼ばない)。"""
+    fx = FakeXClient(searches={_buzz_query(session): [
+        {"id": "601", "text": "バズ投稿", "author_id": "u1", "author_handle": "someone"},
+    ]})
+    monitor.run_buzz_once(session, fx, fake_formatter)
+    f2 = type(fake_formatter)()
+    res2 = monitor.run_buzz_once(session, fx, f2)
+    assert res2["candidates"] == 0
+    assert f2.select_calls == []
+
+
+def test_buzz_run_once_drops_reposts_and_old(session, fake_formatter):
+    """RT・引用RT・時間窓(6h)超は対象外。"""
+    now = datetime.now(timezone.utc)
+    fx = FakeXClient(searches={_buzz_query(session): [
+        {"id": "1", "text": "RT @x: バズ", "author_id": "u1", "created_at": now},
+        {"id": "2", "text": "引用バズ", "author_id": "u1", "created_at": now, "is_repost": True},
+        {"id": "3", "text": "8時間前のバズ", "author_id": "u1",
+         "created_at": now - timedelta(hours=8)},
+        {"id": "4", "text": "新しいバズ", "author_id": "u1", "created_at": now},
+    ]})
+    res = monitor.run_buzz_once(session, fx, fake_formatter)
+    assert res["candidates"] == 1
+    assert fake_formatter.select_calls[0]["candidates"][0]["tweet_id"] == "4"
+
+
+def test_engage_backlog_count_counts_draft_engages_only(session):
+    """乱造ガードの件数は「DRAFT状態のreply/quote」だけを数える(post・承認済みは除外)。"""
+    session.add(Draft(kind=DraftKind.REPLY, status=DraftStatus.DRAFT,
+                      segments_json='["a"]', target_tweet_id="1"))
+    session.add(Draft(kind=DraftKind.QUOTE, status=DraftStatus.DRAFT,
+                      segments_json='["b"]', target_tweet_id="2"))
+    session.add(Draft(kind=DraftKind.POST, status=DraftStatus.DRAFT, segments_json='["c"]'))
+    session.add(Draft(kind=DraftKind.REPLY, status=DraftStatus.APPROVED,
+                      segments_json='["d"]', target_tweet_id="3"))
+    session.commit()
+    assert monitor.engage_backlog_count(session) == 2

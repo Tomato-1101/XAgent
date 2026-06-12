@@ -114,6 +114,8 @@ export interface MonitorSettings {
   min_impressions: number; // 絡み候補の最低インプレッション(未満は対象外)
   celeb_watch_enabled: boolean; // 有名人ウォッチ(AI言及の即時検出・既定OFF)
   celeb_list_id?: string | null; // 有名人ウォッチ対象のXリストID
+  buzz_watch_enabled: boolean; // バズウォッチ(min_faves検索の網羅検出・既定OFF)
+  buzz_min_faves: number; // バズ判定のいいね数しきい値
   updated_at?: string;
 }
 

@@ -22,6 +22,8 @@ export default function Settings() {
   const [boSaving, setBoSaving] = useState(false);
   const [celebRunning, setCelebRunning] = useState(false);
   const [celebStatus, setCelebStatus] = useState<string | null>(null);
+  const [buzzRunning, setBuzzRunning] = useState(false);
+  const [buzzStatus, setBuzzStatus] = useState<string | null>(null);
   const toast = useToast();
 
   useEffect(() => {
@@ -44,7 +46,7 @@ export default function Settings() {
     }
   }
 
-  async function saveNum(key: "max_drafts_per_run" | "min_impressions", n: number) {
+  async function saveNum(key: "max_drafts_per_run" | "min_impressions" | "buzz_min_faves", n: number) {
     if (!settings) return;
     const val = Math.max(0, Math.floor(n) || 0);
     setSaving(true);
@@ -91,6 +93,38 @@ export default function Settings() {
     } finally {
       setCelebRunning(false);
       setCelebStatus(null);
+    }
+  }
+
+  async function runBuzzOnce() {
+    setBuzzRunning(true);
+    setBuzzStatus("開始しています…");
+    try {
+      const { job_id } = await api.buzzRunOnceStart();
+      const res = await api.pollJob<{
+        candidates: number;
+        reply_suggestions: number;
+        quote_suggestions: number;
+      }>(job_id, (msg, sec) => {
+        const m = Math.floor(sec / 60);
+        setBuzzStatus(`${msg || "実行中"}（経過 ${m > 0 ? `${m}分` : ""}${sec % 60}秒）`);
+      });
+      if (res.candidates === 0) {
+        toast({ tone: "info", message: "新しいバズ投稿はありませんでした。" });
+      } else {
+        const total = res.reply_suggestions + res.quote_suggestions;
+        toast({
+          tone: "success",
+          message: total
+            ? `絡み案を${total}件生成しました（Inboxで確認できます）。`
+            : `候補${res.candidates}件を確認しましたが、絡む価値が高い投稿はありませんでした。`,
+        });
+      }
+    } catch (e) {
+      toast({ tone: "error", message: `バズウォッチに失敗: ${String(e)}` });
+    } finally {
+      setBuzzRunning(false);
+      setBuzzStatus(null);
     }
   }
 
@@ -255,6 +289,55 @@ export default function Settings() {
                 {celebRunning ? <Spinner /> : "今すぐチェック"}
               </Button>
               {celebStatus && <span className="text-xs text-zinc-400">{celebStatus}</span>}
+            </div>
+          </>
+        ) : (
+          <div className="text-sm text-zinc-500">読み込み中…</div>
+        )}
+      </Card>
+
+      {/* バズウォッチ: アカウント不問でmin_faves検索の「既にバズった投稿」に絡み案 */}
+      <Card className="space-y-1">
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-zinc-400">バズウォッチ（バズ投稿の網羅検出）</div>
+          {saving && <Spinner />}
+        </div>
+        {settings ? (
+          <>
+            <Switch
+              label="バズ投稿を自動検出する"
+              hint="アカウントを問わず「いいねがしきい値以上付いた投稿」を定期検索し、絡み案を下書き生成（既定オフ・下書きのみ・自動投稿はしない）"
+              checked={Boolean(settings.buzz_watch_enabled)}
+              disabled={saving}
+              onChange={(v) => toggle("buzz_watch_enabled", v)}
+            />
+            <div className="flex items-center justify-between gap-3 pt-2">
+              <span className="text-sm">
+                <span className="text-zinc-200">バズ判定のいいね数</span>
+                <span className="ml-2 text-xs text-zinc-500">
+                  この数以上いいねが付いた日本語投稿を「バズ」として拾う（バズ予測ではなく実績で判定）。
+                </span>
+              </span>
+              <Input
+                type="number"
+                min={0}
+                step={500}
+                className="w-28 shrink-0"
+                defaultValue={settings.buzz_min_faves}
+                disabled={saving}
+                onBlur={(e) => saveNum("buzz_min_faves", Number(e.target.value))}
+              />
+            </div>
+            <p className="pt-1 text-xs text-zinc-500">
+              検出は検索クエリ1回/サイクル。どれに絡むかはAIが選定し（最大3件/回）、
+              告知やファンダム向け投稿などリプが浮くものは外します。
+              自動検出中は承認待ちの絡み案が30件以上溜まると生成を一時停止します（承認かInboxの整理で再開）。
+            </p>
+            <div className="flex items-center gap-3 pt-2">
+              <Button size="sm" variant="outline" onClick={runBuzzOnce} disabled={buzzRunning}>
+                {buzzRunning ? <Spinner /> : "今すぐチェック"}
+              </Button>
+              {buzzStatus && <span className="text-xs text-zinc-400">{buzzStatus}</span>}
             </div>
           </>
         ) : (

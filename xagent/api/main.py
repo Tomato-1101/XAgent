@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
         # 自動投稿はしない。
         from apscheduler.schedulers.background import BackgroundScheduler
 
-        from ..daemon import celeb_tick, monitor_tick, news_tick, queue_tick
+        from ..daemon import buzz_tick, celeb_tick, monitor_tick, news_tick, queue_tick
 
         sched = BackgroundScheduler(timezone="UTC")
         # 予約投稿の発火: 常時。posting_enabled/認証・予約/制限帯/頻度ガードを通すので誤爆しない。
@@ -83,6 +83,12 @@ async def lifespan(app: FastAPI):
         sched.add_job(
             celeb_tick, "interval",
             seconds=settings.celeb_interval_seconds, id="celeb",
+            max_instances=1, coalesce=True,
+        )
+        # バズウォッチ: buzz_watch_enabled(既定OFF)で内部制御。min_faves検索1クエリ/回＋乱造ガード。
+        sched.add_job(
+            buzz_tick, "interval",
+            seconds=settings.buzz_interval_seconds, id="buzz",
             max_instances=1, coalesce=True,
         )
         sched.start()

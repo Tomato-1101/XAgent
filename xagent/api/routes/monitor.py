@@ -66,6 +66,28 @@ def celeb_run_once(
     return {"job_id": start_job(_run, label="celeb-run-once")}
 
 
+@router.post("/buzz-run-once")
+def buzz_run_once(
+    limit: int | None = None,
+    x_client: XClient = Depends(get_x_client),
+    formatter: Formatter = Depends(get_formatter),
+    session_factory: Callable[[], Session] = Depends(get_session_factory),
+) -> dict:
+    """バズウォッチを1回実行(min_faves検索で「既にバズった投稿」に絡み案を生成)。
+
+    検索1クエリ+ヒット時のみAI生成。トグル(buzz_watch_enabled)がOFFでも手動で試せる。
+    手動実行は自動tickの乱造ガード(承認待ち件数)を通らない。
+    """
+
+    def _run(set_progress: Callable[[str], None]) -> dict:
+        with session_factory() as session:
+            return monitor_mod.run_buzz_once(
+                session, x_client, formatter, max_drafts=limit, progress=set_progress
+            )
+
+    return {"job_id": start_job(_run, label="buzz-run-once")}
+
+
 @router.get("/settings", response_model=MonitorSettings)
 def get_settings(session: Session = Depends(db_session)) -> MonitorSettings:
     return monitor_mod.get_monitor_settings(session)
