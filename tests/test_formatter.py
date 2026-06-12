@@ -63,10 +63,11 @@ def _selecting_formatter(data):
     f = Formatter(complete=lambda s, u: "")
     captured = {}
 
-    def fake(system, user, schema):
+    def fake(system, user, schema, timeout=None):
         captured["system"] = system
         captured["user"] = user
         captured["schema"] = schema
+        captured["timeout"] = timeout
         return data
 
     f._run_structured = fake
@@ -117,6 +118,14 @@ def test_select_caps_same_author_at_two():
     ]})
     out = f.select_engagements(_CANDS, 10)
     assert [s["tweet_id"] for s in out] == ["1", "2", "4"]
+
+
+def test_select_uses_long_timeout():
+    """バッチ選定(9万トークン超)は既定240秒を超えるため、専用の長いタイムアウトでCLIを呼ぶ。"""
+    f, cap = _selecting_formatter({"selections": []})
+    f.select_engagements(_CANDS, 2)
+    assert cap["timeout"] == f.settings.claude_cli_select_timeout_seconds
+    assert cap["timeout"] > f.settings.claude_cli_timeout_seconds
 
 
 def test_select_respects_max_n():

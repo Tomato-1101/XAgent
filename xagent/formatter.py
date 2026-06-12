@@ -108,9 +108,11 @@ class Formatter:
         self.usage_output += res.output_tokens
         return res.text
 
-    def _run_structured(self, system: str, user: str, schema: dict) -> dict | None:
+    def _run_structured(
+        self, system: str, user: str, schema: dict, timeout: int | None = None
+    ) -> dict | None:
         """JSONスキーマ強制で1回実行し、構造化出力(dict)を返す。テストで差し替え可能。"""
-        res = run_claude(system, user, self.settings, json_schema=schema)
+        res = run_claude(system, user, self.settings, json_schema=schema, timeout=timeout)
         self.usage_input += res.input_tokens
         self.usage_output += res.output_tokens
         if res.structured is not None:
@@ -340,7 +342,11 @@ reply / quote の判断基準:
             }
             lines.append(json.dumps(item, ensure_ascii=False))
         user = "候補投稿一覧(1行1件のJSON):\n" + "\n".join(lines)
-        data = self._run_structured(system, user, self._SELECT_SCHEMA)
+        # バッチ選定は9万トークン超の入力で既定240秒を超えることがあるため専用の長いタイムアウト
+        data = self._run_structured(
+            system, user, self._SELECT_SCHEMA,
+            timeout=self.settings.claude_cli_select_timeout_seconds,
+        )
         by_id = {str(c.get("tweet_id", "")): c for c in candidates}
         out: list[dict] = []
         seen_ids: set[str] = set()

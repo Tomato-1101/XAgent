@@ -22,7 +22,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None  # 旧API直叩き時代の名残。現在は未参照(.env互換のため残置)
     claude_model: str = "claude-opus-4-8"
     claude_cli_path: str | None = None  # 未設定なら which("claude") → ~/.local/bin/claude
-    claude_cli_timeout_seconds: int = 240  # フロントの fetch 既定(~300s)内に収める
+    claude_cli_timeout_seconds: int = 240  # 単発生成(リプ/引用/整形)用。通常は1〜2分で終わる
+    # 絡みのバッチ選定は候補最大120件・実測9万トークン超の入力で240秒を超えることがある。
+    # ジョブ化済みでブラウザfetchの300秒制約は無くなったため、打ち切らず長く待つ
+    # (途中で切ると直前の候補収集10分超のAPI消費が無駄になる)。
+    claude_cli_select_timeout_seconds: int = 900
 
     # --- X API (OAuth1.0a: 投稿/書込, Bearer: 読取) ---
     x_api_key: str | None = None
