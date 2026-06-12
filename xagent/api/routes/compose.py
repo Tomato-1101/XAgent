@@ -275,4 +275,4 @@ def quote_from_url(
             )
             return draft_to_read(draft).model_dump(mode="json")
 
-    return {"job_id": start_job(_generate)}
+    return {"job_id": start_job(_generate, label="quote-from-url")}

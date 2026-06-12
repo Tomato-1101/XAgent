@@ -42,7 +42,7 @@ def run_once(
                 session, x_client, formatter, me["id"], max_drafts=limit, progress=set_progress
             )
 
-    return {"job_id": start_job(_run)}
+    return {"job_id": start_job(_run, label="monitor-run-once")}
 
 
 @router.get("/settings", response_model=MonitorSettings)

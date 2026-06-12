@@ -36,8 +36,12 @@ _lock = threading.Lock()
 _TTL_SECONDS = 600  # 完了後にこの時間が過ぎたジョブは次の start_job 時に掃除する
 
 
-def start_job(fn: Callable[[Callable[[str], None]], dict]) -> str:
-    """fn(set_progress) を別スレッドで実行して job_id を返す。fn は JSON 化可能な dict を返すこと。"""
+def start_job(fn: Callable[[Callable[[str], None]], dict], label: str | None = None) -> str:
+    """fn(set_progress) を別スレッドで実行して job_id を返す。fn は JSON 化可能な dict を返すこと。
+
+    label はジョブ種別(monitor-run-once 等)。フロントが画面表示時に GET /jobs で
+    実行中の生成を見つけて再接続するための識別子。
+    """
     job_id = uuid.uuid4().hex
     with _lock:
         now = time.monotonic()
@@ -45,6 +49,7 @@ def start_job(fn: Callable[[Callable[[str], None]], dict]) -> str:
             del _jobs[jid]
         _jobs[job_id] = {
             "status": "running",
+            "label": label,
             "progress": None,
             "started_at": now,
             "result": None,
@@ -71,6 +76,24 @@ def start_job(fn: Callable[[Callable[[str], None]], dict]) -> str:
 
     threading.Thread(target=_run, daemon=True).start()
     return job_id
+
+
+@router.get("")
+def list_running_jobs() -> list[dict]:
+    """実行中ジョブの一覧。画面を開き直した時に進行中の生成へ再接続するために使う
+    (リロードや画面遷移でポーリングが切れても、進捗と結果を受け取り直せる)。"""
+    with _lock:
+        now = time.monotonic()
+        return [
+            {
+                "job_id": jid,
+                "label": j["label"],
+                "progress": j["progress"],
+                "elapsed_seconds": int(now - j["started_at"]),
+            }
+            for jid, j in _jobs.items()
+            if j["status"] == "running"
+        ]
 
 
 @router.get("/{job_id}")

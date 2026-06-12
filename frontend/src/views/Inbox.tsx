@@ -71,13 +71,17 @@ export default function Inbox({ me }: { me: Me | null }) {
   // スマホでタブ復帰した時や生成完了後に手動リロードしなくても一覧が追従するように
   useAutoRefresh(reload);
 
-  async function runMonitor() {
+  // 実行中の監視ジョブを完了まで追跡し、進捗表示と結果反映を行う(開始直後・画面再訪の両方から呼ぶ)
+  async function trackMonitorJob(jobId: string) {
     setBusy(true);
     setError(null);
     setInfo(null);
-    setRunProgress("開始しています…");
     try {
-      const r = await api.monitorRunOnce(runLimit > 0 ? runLimit : undefined, (msg, sec) => {
+      const r = await api.pollJob<{
+        reply_suggestions: number;
+        quote_suggestions: number;
+        candidates: number;
+      }>(jobId, (msg, sec) => {
         setRunProgress(progressLabel(msg, sec));
         // 下書きは選定後1件ずつDBに入るので、作成が始まったら一覧へ即反映する
         if (msg.startsWith("下書き作成中")) reload();
@@ -85,7 +89,7 @@ export default function Inbox({ me }: { me: Me | null }) {
       setInfo(
         r.candidates === 0
           ? "新しい絡み候補が見つかりませんでした（24時間以内の対象投稿がない、または生成済み・却下済み）。"
-          : `返信案 ${r.reply_suggestions} 件・引用案 ${r.quote_suggestions} 件を生成しました（候補 ${r.candidates} 件・上限 ${runLimit} 件）`
+          : `返信案 ${r.reply_suggestions} 件・引用案 ${r.quote_suggestions} 件を生成しました（候補 ${r.candidates} 件）`
       );
       reload();
     } catch (e) {
@@ -95,6 +99,37 @@ export default function Inbox({ me }: { me: Me | null }) {
       setRunProgress(null);
     }
   }
+
+  async function runMonitor() {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    setRunProgress("開始しています…");
+    try {
+      const { job_id } = await api.monitorRunOnceStart(runLimit > 0 ? runLimit : undefined);
+      await trackMonitorJob(job_id);
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+      setRunProgress(null);
+    }
+  }
+
+  // 画面を開いた時、進行中の監視ジョブ(他端末やCLIから開始した分も含む)があれば再接続して
+  // 進捗を表示する。リロードや画面遷移で進捗が見えなくなる問題への対策。
+  useEffect(() => {
+    api
+      .runningJobs()
+      .then((jobs) => {
+        const j = jobs.find((x) => x.label === "monitor-run-once");
+        if (j) {
+          setRunProgress(progressLabel(j.progress ?? "実行中の生成に再接続しました", j.elapsed_seconds));
+          void trackMonitorJob(j.job_id);
+        }
+      })
+      .catch(() => {/* 一覧が取れなくても画面表示は続行 */});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // URLから引用案(引用RT)をAIに生成させる。監視の自動生成と同じく相手投稿からコメントをAI生成。
   async function makeQuoteFromUrl() {

@@ -100,14 +100,12 @@ export type JobProgress = (message: string, elapsedSeconds: number) => void;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 長時間のAI生成をジョブAPIで実行する。POST で job_id を受け取り /jobs/{id} を
- * ポーリングして結果を返す(同期fetchだとブラウザの約300秒上限・CLIタイムアウト・
- * サーバ再起動で「Failed to fetch」になるため)。ポーリング中の一時的な接続断は
+ * 既知の job_id を完了までポーリングして結果を返す。ポーリング中の一時的な接続断は
  * リトライ継続し、404(サーバ再起動でジョブ消滅)だけ中断として扱う。
  * onProgress でサーバ側の進捗(何をしているか+経過秒)を受け取れる(エラーと待ち時間の区別用)。
+ * 画面を開き直した時に実行中ジョブへ再接続する用途でも使う。
  */
-async function runJob<T>(path: string, init?: RequestInit, onProgress?: JobProgress): Promise<T> {
-  const { job_id } = await req<{ job_id: string }>(path, init);
+async function pollJob<T>(job_id: string, onProgress?: JobProgress): Promise<T> {
   for (;;) {
     await sleep(2000);
     let j: JobStatus;
@@ -124,6 +122,16 @@ async function runJob<T>(path: string, init?: RequestInit, onProgress?: JobProgr
     if (j.status === "error") throw new Error(j.error ?? "生成に失敗しました。");
     onProgress?.(j.progress ?? "", j.elapsed_seconds);
   }
+}
+
+/**
+ * 長時間のAI生成をジョブAPIで実行する。POST で job_id を受け取り /jobs/{id} を
+ * ポーリングして結果を返す(同期fetchだとブラウザの約300秒上限・CLIタイムアウト・
+ * サーバ再起動で「Failed to fetch」になるため)。
+ */
+async function runJob<T>(path: string, init?: RequestInit, onProgress?: JobProgress): Promise<T> {
+  const { job_id } = await req<{ job_id: string }>(path, init);
+  return pollJob<T>(job_id, onProgress);
 }
 
 export const api = {
@@ -297,13 +305,18 @@ export const api = {
   deleteTarget: (id: number) => req<{ deleted: number }>(`/targets/${id}`, { method: "DELETE" }),
 
   // limit を渡すとその回だけ生成数を上限管理(乱造防止)。未指定なら設定の max_drafts_per_run。
-  // 候補収集+バッチAI選定で数分〜15分かかるためジョブ経由。onProgress で進捗を逐次受け取る。
-  monitorRunOnce: (limit?: number, onProgress?: JobProgress) =>
-    runJob<{ reply_suggestions: number; quote_suggestions: number; candidates: number }>(
-      `/monitor/run-once${limit != null ? `?limit=${limit}` : ""}`,
-      { method: "POST" },
-      onProgress,
+  // 候補収集+バッチAI選定で数分〜15分かかるためジョブ開始のみ(追跡は pollJob で行う。
+  // 画面を開き直しても runningJobs→pollJob で実行中の生成へ再接続できるよう分離)。
+  monitorRunOnceStart: (limit?: number) =>
+    req<{ job_id: string }>(`/monitor/run-once${limit != null ? `?limit=${limit}` : ""}`, {
+      method: "POST",
+    }),
+  // 実行中ジョブの一覧。画面表示時に進行中の生成があれば再接続して進捗を出すために使う。
+  runningJobs: () =>
+    req<{ job_id: string; label: string | null; progress: string | null; elapsed_seconds: number }[]>(
+      "/jobs",
     ),
+  pollJob,
   getMonitorSettings: () => req<MonitorSettings>("/monitor/settings"),
   putMonitorSettings: (flags: Partial<MonitorSettings>) =>
     req<MonitorSettings>("/monitor/settings", {

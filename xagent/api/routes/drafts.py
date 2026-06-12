@@ -135,7 +135,7 @@ def recast(
             service.recast_engage_draft(s, formatter, d, to_kind)
             return draft_to_read(d).model_dump(mode="json")
 
-    return {"job_id": start_job(_run)}
+    return {"job_id": start_job(_run, label="recast")}
 
 
 @router.post("/{draft_id}/queue", response_model=DraftRead)

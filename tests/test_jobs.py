@@ -67,6 +67,33 @@ def test_job_progress_and_elapsed_visible_while_running(client):
     assert j["status"] == "done"
 
 
+def test_running_jobs_listed_with_label(client):
+    """GET /jobs は実行中ジョブだけを label/progress/elapsed 付きで返す(画面再訪時の再接続用)。"""
+    import threading
+
+    release = threading.Event()
+
+    def _slow(progress) -> dict:
+        progress("候補収集中")
+        release.wait(5)
+        return {"ok": True}
+
+    job_id = start_job(_slow, label="monitor-run-once")
+    try:
+        r = client.get("/jobs")
+        assert r.status_code == 200
+        mine = [j for j in r.json() if j["job_id"] == job_id]
+        assert len(mine) == 1
+        assert mine[0]["label"] == "monitor-run-once"
+        assert isinstance(mine[0]["elapsed_seconds"], int)
+    finally:
+        release.set()
+    j = wait_job(client, _FakeResp(job_id))
+    assert j["status"] == "done"
+    # 完了したジョブは一覧から消える
+    assert all(x["job_id"] != job_id for x in client.get("/jobs").json())
+
+
 def test_job_unknown_id_404(client):
     r = client.get("/jobs/deadbeef")
     assert r.status_code == 404
