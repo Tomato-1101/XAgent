@@ -51,7 +51,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 ### プロセス構成
 
 - **API プロセス(常駐)**: FastAPI (`xagent/api/main.py`) を uvicorn で起動。launchd (`com.tomato.xagent`、`KeepAlive` 有効)で `127.0.0.1:8000` に常駐する。
-- **内蔵 BackgroundScheduler**: API プロセスの `lifespan` 内で `init_db()` 後、`scheduler_enabled` が真なら APScheduler の `BackgroundScheduler(timezone="UTC")` を生成。別デーモンを起こさず同1プロセスで予約投稿(`queue_tick`、既定60秒)と絡み案生成(`monitor_tick`、既定180秒)を回す。**ただし monitor は `MonitorSettings.auto_monitor_enabled`(既定OFF)でゲートされ、OFFの間は即returnしてAPIを消費しない**(UIトグルでオンオフ。乱造防止のため既定OFF＝必要な時だけオンにする)。launchd 常駐構成では実際に回るのはこの内蔵スケジューラ。
+- **内蔵 BackgroundScheduler**: API プロセスの `lifespan` 内で `init_db()` 後、`scheduler_enabled` が真なら APScheduler の `BackgroundScheduler(timezone="UTC")` を生成。別デーモンを起こさず同1プロセスで予約投稿(`queue_tick`、既定60秒)・絡み案生成(`monitor_tick`、既定180秒)・ニュース速報生成(`news_tick`、既定600秒)を回す。**ただし monitor は `MonitorSettings.auto_monitor_enabled`、news は `NewsSettings.auto_news_enabled`(いずれも既定OFF)でゲートされ、OFFの間は即returnしてAPIを消費しない**(UIトグルでオンオフ。乱造防止のため既定OFF＝必要な時だけオンにする)。launchd 常駐構成では実際に回るのはこの内蔵スケジューラ。
 - **フロントエンド**: Vite + React + TypeScript の SPA (`frontend/`)。開発時は `vite.config.ts` で `port: 5180, strictPort: true` に固定(自動フォールバックしない)。**本番UIは FastAPI が `frontend/dist` を同一オリジンで配信**(`GET /` が index.html を no-cache 返却、`/assets` を StaticFiles マウント。dist 未ビルドなら `/` は 503 で自己説明エラー)。
 - **リモートアクセス(スマホ)**: `tailscale serve --bg 8000` で tailnet 内に HTTPS プロキシ(`https://<mac名>.<tailnet>.ts.net` → `127.0.0.1:8000`)。uvicorn のバインドは `127.0.0.1` のまま変えない(インターネット非公開)。スマホは Tailscale アプリで接続し、ブラウザで上記 URL を開く。同一オリジン配信のため CORS 設定は不要。認証は `API_TOKEN`(下記 §7)。
 - **永続化**: SQLite (`xagent.db`、`DB_PATH` 既定)。SQLModel(SQLAlchemy 上)経由でアクセスし、生 SQL は原則不使用。
@@ -65,9 +65,9 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `xagent/models.py` | SQLModel エンティティと Enum 定義 |
 | `xagent/db.py` | エンジン・初期化・冪等マイグレーション・シード |
 | `xagent/config.py` | `.env` 設定(`Settings`) |
-| `xagent/formatter.py` | LLM(Claude)抽象。整形・案複数生成・返信/引用生成・絡み候補のバッチ選定 |
+| `xagent/formatter.py` | LLM(Claude)抽象。整形・案複数生成・返信/引用生成・絡み候補/ニュース速報のバッチ選定 |
 | `xagent/claude_cli.py` | Claude Code CLI のヘッドレス使い捨てセッション実行(`run_claude`、subscription課金) |
-| `xagent/prompts.py` | バズの型(playbook)定数(A〜P / R1〜R6 / 引用) |
+| `xagent/prompts.py` | バズの型(playbook)定数(A〜P / R1〜R6 / 引用 / ニュース速報N1〜N5) |
 | `xagent/templates.py` | 「型」(`PromptTemplate`)の CRUD・既定切替・AI 自動選択・シード |
 | `xagent/style.py` | 文体ガイド(`StyleProfile`)・過去投稿学習(`PastPost`) |
 | `xagent/text.py` | X 加重文字数・折りたたみ判定・スレッド分割(LLM 不使用) |
@@ -81,7 +81,8 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `xagent/blackout.py` | 制限時間帯の設定・判定 |
 | `xagent/scheduler.py` | 最適時間スロット算出・予約キュー消化 |
 | `xagent/monitor.py` | 受信監視・絡み案生成 |
-| `xagent/daemon.py` | 常駐ティック関数(`monitor_tick` / `queue_tick`)と `run` |
+| `xagent/news.py` | ニュース速報の下書き生成(XNewsBotのDBを読み取り専用で参照) |
+| `xagent/daemon.py` | 常駐ティック関数(`monitor_tick` / `news_tick` / `queue_tick`)と `run` |
 | `xagent/x_client.py` | `XClient`(公式 X API ラッパ、書込/読取の窓口) |
 | `xagent/twitterapi_client.py` | `TwitterApiIoClient`(twitterapi.io 読取専用バックエンド) |
 | `xagent/cli.py` | Typer CLI |
@@ -106,7 +107,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `DraftKind` | `POST="post"`, `REPLY="reply"`, `QUOTE="quote"`, `REPOST="repost"` | 下書きの種別。REPOST はコメント無しリポスト(自分の過去投稿の再拡散用) |
 | `DraftStatus` | `DRAFT="draft"`, `APPROVED="approved"`, `QUEUED="queued"`, `POSTED="posted"`, `REJECTED="rejected"`, `CANCELED="canceled"` | 下書きの状態。CANCELED は「ゴミ箱」=DB に残し、容量超過時に古い順で物理削除 |
 | `TargetKind` | `MANUAL="manual"`, `LIST="list"`, `GENRE="genre"`, `FOLLOWING="following"` | 絡み対象の種別。LIST は `list_id` のメンバーを巡回時に毎回展開、GENRE は `keyword` 探索 |
-| `TemplateKind` | `POST="post"`, `REPLY="reply"`, `QUOTE="quote"` | 「型」のカテゴリ。POST=バズの型A〜P、REPLY=絡みリプの型R1〜R6、QUOTE=引用RTの型 |
+| `TemplateKind` | `POST="post"`, `REPLY="reply"`, `QUOTE="quote"`, `NEWS="news"` | 「型」のカテゴリ。POST=バズの型A〜P、REPLY=絡みリプの型R1〜R6、QUOTE=引用RTの型、NEWS=ニュース速報の型N1〜N5(大手の実投稿から抽出) |
 | `CostKind` | `READ="read"`, `WRITE="write"`, `TL="tl"`, `LLM="llm"` | コストログ種別 |
 | `PostTrigger` | `MANUAL="manual"`, `SCHEDULED="scheduled"` | 投稿の発火経路(`guards.py`)。この2値のみが投稿を許す |
 
@@ -220,6 +221,16 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `max_drafts_per_run` | `int` | `10` | 1監視サイクルで作る下書き総数上限(全ソース横断で共有) |
 | `updated_at` | `datetime` | `_utcnow` | (`set_monitor_settings` 内で明示更新しない) |
 
+#### `NewsSettings`(`newssettings`)— ニュース速報生成の設定【単一行運用】
+
+| フィールド | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `auto_news_enabled` | `bool` | `False` | ニュース速報の自動生成(news_tick)を回すか。UI(News)のトグルで制御。乱造防止のため既定OFF |
+| `genres_json` | `str` | `'["AI", "テクノロジー"]'` | 対象ジャンル(XNewsBot の `genredigest.genre` と突合)の JSON 配列 |
+| `max_posts_per_run` | `int` | `3` | 1回の生成で作る下書き数上限(バッチAI選定の `max_n`) |
+| `last_digest_id` | `int` | `0` | 処理済みダイジェストのカーソル(`genredigest.id`)。同じニュースを二度生成しない |
+| `updated_at` | `datetime` | `_utcnow` | |
+
 #### `BlackoutSettings`(`blackoutsettings`)— 投稿禁止時間帯【単一行 id=1 運用】
 
 | フィールド | 型 | 既定 | 意味 |
@@ -243,7 +254,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 
 ### 単一行(シングルトン)テーブルの運用
 
-`StyleProfile`(name=default)/`MonitorSettings`(id=1)/`BlackoutSettings`(id=1)はいずれも「単一行運用」だが、DB 制約ではなく利用側コードが保証する。`get_monitor_settings` / `get_blackout_settings` は先頭行を返し、無ければ既定値で作成・commit する(`StyleProfile` は `set_style_guide` が name=default で upsert)。
+`StyleProfile`(name=default)/`MonitorSettings`(id=1)/`BlackoutSettings`(id=1)/`NewsSettings` はいずれも「単一行運用」だが、DB 制約ではなく利用側コードが保証する。`get_monitor_settings` / `get_blackout_settings` / `get_news_settings` は先頭行を返し、無ければ既定値で作成・commit する(`StyleProfile` は `set_style_guide` が name=default で upsert)。
 
 ### マイグレーション(`db._migrate` / `_ADDED_COLUMNS`)
 
@@ -257,7 +268,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 
 ### シード(`templates.seed_builtin_templates`)
 
-`_BUILTIN` の3型を投入: `("バズの型 (buzz-playbook)", POST, POST_PLAYBOOK)`、`("絡みリプの型 (R1〜R6)", REPLY, REPLY_PLAYBOOK)`、`("引用RTの型", QUOTE, QUOTE_PLAYBOOK)`。本文は `xagent/prompts.py` の定数。**冪等性は `name` の完全一致で判定**(同名が既存ならスキップ)、`builtin=True` で作成。投入後、各 kind に active が無ければ `created_at` 昇順先頭を `set_active`。戻り値は新規投入件数。
+`_BUILTIN` の4型を投入: `("バズの型 (buzz-playbook)", POST, POST_PLAYBOOK)`、`("絡みリプの型 (R1〜R6)", REPLY, REPLY_PLAYBOOK)`、`("引用RTの型", QUOTE, QUOTE_PLAYBOOK)`、`("ニュース速報の型 (N1〜N5)", NEWS, NEWS_PLAYBOOK)`。本文は `xagent/prompts.py` の定数。**冪等性は `name` の完全一致で判定**(同名が既存ならスキップ)、`builtin=True` で作成。投入後、各 kind に active が無ければ `created_at` 昇順先頭を `set_active`。戻り値は新規投入件数。
 
 エッジケース: **ユーザーがビルトインの型を改名すると、再 `init_db` で同名扱いされず重複投入される**(`builtin` フラグはスキップ判定に使われない)。
 
@@ -344,7 +355,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 - **整形(format_post)**: 雑メモを「本人のノウハウ口調の X 投稿」へ変換。`allow_long=False`(既定)は140字厳守でスレッド化しない。`allow_long=True` は長文フック可。型(playbook)・口調ガイド・真似る相手の特徴をシステムプロンプトの追記ブロックとして注入。出力は本文のみ(前置き・引用符・コードブロック禁止)。
 - **案を複数(format_variations)**: 1メモから言い回し違いを n 案(`n=max(1,min(n,5))` で1〜5にクランプ)。`---` だけの行で区切らせ、各片を整形。`raw=True` では言い回し違いを作れないため1件のみ。
 - **真似る(emulate)**: 学習済み `AccountProfile` の `profile_text` と代表投稿を整形プロンプトに乗せる。**選択時のみ**有効で、未指定なら学習データは自動注入されない。常時適用は手入力のスタイルガイドのみ。
-- **型ライブラリ(PromptTemplate)**: POST/REPLY/QUEUE の3カテゴリ。`POST_PLAYBOOK` の型 A〜P(J/O は欠番)、`REPLY_PLAYBOOK` の R1〜R6、`QUOTE_PLAYBOOK`。各 kind で active は最大1件(monitor の自動生成が既定として使う)。
+- **型ライブラリ(PromptTemplate)**: POST/REPLY/QUOTE/NEWS の4カテゴリ。`POST_PLAYBOOK` の型 A〜P(J/O は欠番)、`REPLY_PLAYBOOK` の R1〜R6、`QUOTE_PLAYBOOK`、`NEWS_PLAYBOOK` の N1〜N5(大手ニュース系/個人解説系の実投稿から抽出した速報の型＋Xアルゴリズム対応の注意書き)。各 kind で active は最大1件(monitor / news の自動生成が既定として使う)。
 - **AI 自動選択(auto_template / choose_template)**: 「AIに任せる」。候補が0件→None、1件→そのID(LLM 呼ばず)、2件以上のときだけ LLM に id を選ばせる。候補集合に含まれる id のときだけ採用、解析失敗は None。
 - **指令解析(commands.parse_command)**: 自由文(例「このURLをリポストして、以下の文で投稿: …」)を `{action, target_url/tweet_id/handle, body, raw, note}` に構造化。ツイート URL 抽出は Python の正規表現で確定(LLM 誤りに依存しない)。「リポスト」は引用RT(quote)として扱う。**URL が無ければ quote→post に降格**、URL あり×quote では body から対象 URL を除去。
 
@@ -378,6 +389,14 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 - **返信/引用生成(generate_reply / generate_quote)**: 相手投稿から AI が本文生成。返信は `_REPLY_LENGTH_BANDS` から `random.choice` で長さ帯を選び、毎回同じ長さに寄るのを防ぐ。常に1セグメント(分割しない)、140字厳守。
 - **型の事後切替(`service.recast_engage_draft` / `POST /drafts/{id}/recast`)**: AI が選んだ型を人が上書きする導線。未承認(DRAFT)の REPLY⇄QUOTE 間でのみ、新しい型で本文を再生成し `kind` を差し替える(元ポスト情報は維持)。Inbox の「引用RTで送る」「手動で返信に切替」ボタンから呼ぶ。DRAFT 以外/POST 種別は `PolicyViolation`(API は 409)。
 
+### ニュース速報(news.py)
+
+- **ソース**: 別プロジェクト XNewsBot が朝夕に収集するニュースDB(`xnewsbot.db`)を `sqlite3` の `file:...?mode=ro` URI で**読み取り専用**接続(`xnewsbot_db_path`、`.env` の `XNEWSBOT_DB_PATH` で変更可)。XNewsBot 側のコード・DBは一切変更しない。DB不在は `NewsSourceUnavailable`(API は 500 にせず `available=false` で案内)。
+- **新着判定(`fetch_new_items`)**: `NewsSettings.last_digest_id` カーソルより新しい `genredigest` のうち対象ジャンル(`genres_json`、既定 AI/テクノロジー)の `newsitem` を返す。**初回(カーソル0)は全履歴でなく最新の収集日だけ**に絞る(過去分の大量生成防止)。処理後カーソルは対象外ジャンル含む全体 `MAX(id)` まで進める。
+- **生成(`run_news_once` → `formatter.generate_news_posts`)**: 新着記事一覧を**1回のバッチAI判断**(JSONスキーマ強制、NEWS型 playbook 注入)に渡し、「どの記事を選ぶか(最大 `max_posts_per_run`)」「通常投稿(post)か一次情報の引用RT(quote)か」「本文」「選定理由」までまとめて決める。下書きを作るだけで投稿しない(人間承認必須)。
+- **Draft化(`_create_news_draft`)**: post は `source_url` があれば**2ツイート目(リプ欄)**に置く(外部リンクのリーチ減点対策)。quote は `source_tweets[0].url` から tweet_id を抽出して `kind=QUOTE`(元ポストの画像・動画が引用で見える)。URL が取れなければ post へフォールバック。選定理由は `source_text` に `[AI選定理由]` として保持。
+- **自動実行(news_tick)**: `auto_news_enabled`(既定OFF)でゲート。新ダイジェスト検知で自動生成(ダイジェスト連動)。手動は News 画面「今すぐ生成」/ `POST /news/run-once`(ジョブ化)。
+
 ### X ネイティブ「リスト」
 
 - **リスト作成(lists.create_list_from_handles)**: ハンドル一覧を正規化(@除去・大小無視重複排除・順序保持)→各 handle を解決→`create_list`→一括 `add_list_member`。1件の失敗で全体を止めず `skipped:[{handle, reason}]` に理由付き計上して継続。書き込みは公式 X API のみ。
@@ -388,7 +407,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 - **分析(サマリ)**: 全 `DraftStatus` のステータス別下書き件数(`GET /analytics/summary`)。
 - **メディア(media)**: 画像(jpg/jpeg/png/webp/gif)最大4枚・動画(mp4/mov/m4v)1個・25MB上限。混在不可。保存は `<uuid4hex><ext>`、DB には相対パス。実際の X アップロードは投稿直前(`media_id` 失効回避)。
 - **おすすめ時間(recommended_times)**: UI 初期値用に重ならない直近 count 件のスロットを返す(`GET /schedule/recommended`)。tier は best(21時)/great(19・22時)/good(8・12・16時)。
-- **デーモントグル(auto_monitor_enabled・既定OFF)**: 絡み案の自動生成のみを UI(Settings)でオンオフ。OFF(既定)でもプロセスは止めず `monitor_tick` が即returnするだけ(API消費なし)。乱造防止のため既定OFF＝必要な時だけオンにし、終わったらオフに戻す運用。手動で1回だけ生成するなら Inbox「監視を1回実行」/ CLI `xagent monitor-once`。予約投稿の発火はこのトグルと無関係に常時動く。
+- **デーモントグル(auto_monitor_enabled・既定OFF)**: 絡み案の自動生成のみを UI(Settings)でオンオフ。OFF(既定)でもプロセスは止めず `monitor_tick` が即returnするだけ(API消費なし)。乱造防止のため既定OFF＝必要な時だけオンにし、終わったらオフに戻す運用。手動で1回だけ生成するなら Inbox「監視を1回実行」/ CLI `xagent monitor-once`。予約投稿の発火はこのトグルと無関係に常時動く。ニュース速報の自動生成も同じ思想で `NewsSettings.auto_news_enabled`(既定OFF・News 画面のトグル)。
 - **DB容量管理(maintenance.enforce_db_capacity)**: `max_db_bytes`(既定2GB)超過時に端末状態(POSTED/REJECTED/CANCELED)のみ `created_at` 昇順で `_PURGE_BATCH=200` 件ずつ削除し VACUUM。生きた下書きは削除しない。
 - **コスト記録(cost)**: `commit` は常に呼び出し側に委ねる(下書き作成や学習と同一トランザクションで永続化)。`bill_formatter_usage` は整形器のトークン使用量をフラッシュしカウンタをリセット(二重課金防止)。両方0なら None。
 - **通知(notify)**: 承認待ちが出ると macOS 通知(`osascript`)。macOS 以外・通知不可環境では黙って no-op(例外を投げない)。
@@ -430,7 +449,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 | メソッド | パス | 用途 | エラー |
 |---|---|---|---|
-| GET | `/jobs` | **実行中**ジョブの一覧 `[{job_id, label, progress, elapsed_seconds}]`。label はジョブ種別(`monitor-run-once`/`quote-from-url`/`recast`)。画面を開き直した時の再接続用 | - |
+| GET | `/jobs` | **実行中**ジョブの一覧 `[{job_id, label, progress, elapsed_seconds}]`。label はジョブ種別(`monitor-run-once`/`quote-from-url`/`recast`/`news-run-once`)。画面を開き直した時の再接続用 | - |
 | GET | `/jobs/{job_id}` | ジョブ状態 `{job_id, status: running\|done\|error, progress, elapsed_seconds, result, error}` | 404(再起動でジョブ消滅) |
 
 ジョブは**プロセス内メモリ保持**(`xagent/api/jobs.py`、完了10分後に掃除)。worker 再起動で消えるが、結果の実体(下書き)は DB に入るので永続化しない。フロントは 404 を「サーバが再起動したため生成が中断されました」と表示し、一時的な接続断はポーリング継続で吸収する。あわせて未捕捉例外は `main.py` のミドルウェアが **CORS ヘッダ付き JSON 500** に変換する(Starlette 既定のプレーン500は CORSMiddleware を通らず、vite dev :5180 のクロスオリジンでは一律 Failed to fetch に化けるため)。
@@ -482,6 +501,15 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 | POST | `/monitor/run-once` | 監視を1サイクル実行。`?limit=N` でその回だけ生成数を N 件までに絞る(乱造防止)。**ジョブ化: `{"job_id"}` を即返し `run_once` の戻りはジョブの result**(候補収集+バッチ選定で実測数分〜15分) |
 | GET | `/monitor/settings` | 監視設定取得 |
 | PUT | `/monitor/settings` | 監視設定更新(None 以外のフラグのみ部分更新) |
+
+### news(`/news`)
+
+| メソッド | パス | 用途 |
+|---|---|---|
+| POST | `/news/run-once` | ニュース速報の生成を1回実行。`?limit=N` でその回だけ生成数を絞る。**ジョブ化: `{"job_id"}` を即返し**(label=`news-run-once`)、結果 `{news_items, created, draft_ids}` はジョブの result。新着が無ければ何も作らない |
+| GET | `/news/settings` | ニュース速報設定取得(無ければ既定で作成) |
+| PUT | `/news/settings` | 設定更新(`auto_news_enabled`/`genres_json`/`max_posts_per_run`、None 以外のみ部分更新) |
+| GET | `/news/recent` | 直近2日の対象ジャンルのニュース一覧(UI表示用)。XNewsBot の DB が読めなくても 500 にせず `{available: false, error}` を返す |
 
 ### schedule(`/schedule`)
 
@@ -550,7 +578,7 @@ drafts PATCH(segments/scheduled_at 独立)、monitor PUT(None 以外のフラグ
 
 ## 8. フロントエンド画面一覧
 
-Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯一のバックエンド通信層、`types.ts` が共有型。ビュー切替は URL ルータを使わずローカル state `view` の条件レンダリング(初期値 `"compose"`)。サイドバー下部に API 接続バッジ(10秒ごと ping)・「投稿先: @username」・ビルド時刻(`__BUILD_TIME__`、`npm run build` 忘れ検知用)を表示。**lg 未満(スマホ)ではサイドバーがハンバーガー付きドロワーになる**(fixed+translate、backdrop タップで閉じる)。
+Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯一のバックエンド通信層、`types.ts` が共有型。ビュー切替は URL ルータを使わずローカル state `view` の条件レンダリング(URLハッシュ `#inbox` 等と双方向同期する `viewFromHash`、初期値はハッシュ→無ければ `"compose"`。リロードしても画面が保持される)。サイドバー下部に API 接続バッジ(10秒ごと ping)・「投稿先: @username」・ビルド時刻(`__BUILD_TIME__`、`npm run build` 忘れ検知用)を表示。**lg 未満(スマホ)ではサイドバーがハンバーガー付きドロワーになる**(fixed+translate、backdrop タップで閉じる)。
 
 ### 共通規約
 
@@ -565,6 +593,7 @@ Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯�
 |---|---|---|
 | **Compose** | 思いつきを整形して下書き化 | ライブプレビュー(400msデバウンス)、メディア添付(画像4/動画1/混在不可)、emulate選択、案の数(1〜4)、型選択(既定`auto`)、長文許可/raw。指令マーカー(URL or「そのまま」等)があれば「指令を解析」→ confirm → command |
 | **Inbox** | メンション返信案・絡み案の承認/編集/送信 | `kind !== "post"` のみ表示し、性質が違うので**返信案(sky)と引用案/引用RT(violet)に分けて表示**(`kind==="reply"`/`"quote"`)。「監視を1回実行」(横の件数入力でその回の生成上限を指定・既定10、`monitorRunOnce(limit)`)。**「URLから引用案を作る」手動ボタン**(URL入力＋ボタン→`POST /compose/quote-from-url`→`service.create_quote_draft` で相手投稿からAIが引用コメントを生成し引用案セクションに追加。自分のコメントを添える引用は Compose の指令フロー)。**返信案はAPI送信不可のため「コピーして元ポストを開く」(返信文をクリップボードにコピー＋相手ポストを別タブで開く=ポップアップブロック回避でwindow.open先行)＋「却下」のみ**(注記を上部に表示)。承認導線は無く DRAFT のまま手動送信。引用案は「承認して送信」(BlackoutGate経由、`approve→postNow` 順)/「承認のみ」/「却下」 |
+| **News** | XNewsBot のニュースから速報下書きを生成 | 「今すぐ生成」(`newsRunOnceStart`→`pollJob` で進捗表示、結果は「新着なし/速報価値なし/N件作成」を区別して表示)、自動生成トグル(`auto_news_enabled`・既定OFF)+1回の上限(onBlurで保存)、直近2日のニュース一覧(処理済みカーソルより新しいものに「未生成」バッジ)。マウント時 `GET /jobs` で `label=="news-run-once"` の実行中ジョブへ再接続。DB不在時は `available=false` の案内を表示 |
 | **Queue** | 自分投稿の下書き・予約・投稿・取消をタブ管理 | タブ: 下書き(post限定)/承認済み/予約/投稿済み/取消。**全タブで返信(reply)は除外**(API投稿不可のためInboxで手動送信)。queued/approved 表示時に `reconcileSchedules` を1回実行(失効復旧)。最適時間予約/時間指定予約(SchedulePicker)/今すぐ投稿/取消。BlackoutGate は「今すぐ投稿」「時間指定予約」のみ(最適予約・取消は通さない) |
 | **Posts** | 直近1週間の自分投稿を通常リポストで再拡散 | recentPosts/refreshPosts、リポスト(now/time)。Inbox/Queue と並んで `useBlackoutGate` を直接使う画面(投稿・予約を伴う3画面)。Compose は下書き作成専用のため BlackoutGate を使わない |
 | **Targets** | 絡む対象の管理 | リストを丸ごと対象化(推奨、`addTargetList`)、個別ハンドル追加、削除。kind=list は「リスト連携」バッジ、個別は user_id 解決済み/未解決バッジ |
@@ -682,18 +711,19 @@ override: `ensure_not_blackout(in_blackout, override, reason)` は `in_blackout 
 
 ### 常駐デーモン(`daemon.py` + API 内蔵スケジューラ)
 
-2つのティック関数。いずれも例外を内部で握ってデーモンを止めない。
+3つのティック関数。いずれも例外を内部で握ってデーモンを止めない。
 
 | 関数 | ゲート | 動作 |
 |---|---|---|
 | `monitor_tick()` | `auto_monitor_enabled` が OFF(既定) なら**即 return**(`XClient.from_settings` すら呼ばず API 消費ゼロ)。API常駐スケジューラに登録され、UIトグルONの時だけ実処理 | `get_me()` → `monitor.run_once(...)`。提案が1件以上なら `notify` で承認待ち通知。下書きのみ生成・自動投稿しない |
+| `news_tick()` | `auto_news_enabled` が OFF(既定) なら**即 return**(XNewsBot の DB も LLM も触らない) | `news.run_news_once(...)`。新ダイジェスト検知で速報下書きを生成(ダイジェスト連動)、1件以上作れば `notify`。`NewsSourceUnavailable` は warning ログのみ(デーモンを止めない) |
 | `queue_tick()` | ゲートなし(**常時実行**。「予約投稿は止めない」方針) | 発火のたびモジュール変数 `_last_queue_tick_at`(naive UTC)を更新(X資格情報の有無に関わらず先に。`/status` のハートビート)→ `process_due_queue(...)` |
 
 緊急停止の責務分担: 全投稿停止は `config.posting_enabled`、個別の制限帯/頻度ガードは `process_due_queue`→`post_draft`。`auto_post_enabled` は `queue_tick` のゲートに**使われていない**(未使用)。
 
 スケジューラ稼働の可視化: `lifespan` は `app.state.scheduler` に `BackgroundScheduler` を保持し、`queue` ジョブを `next_run_time=now` で登録して起動直後に1回発火させる(ハートビート即時化)。`GET /status` がこのハートビートとジョブの `next_run_time` から `healthy` を判定し、フロント App のサイドバーで「予約スケジューラ 稼働中/停止?」バッジに表示する(起動し忘れ・ハングをUIで検知)。
 
-実運用構成: API プロセスの `lifespan` 内で `BackgroundScheduler(timezone="UTC")` が `queue`(60秒)と `monitor`(180秒、`max_instances=1`, `coalesce=True`)を登録。monitor は `auto_monitor_enabled`(既定OFF)で内部ゲートされ、UIトグルONの時だけ実処理する。`daemon.run`(`BlockingScheduler` 版、CLI `xagent daemon`)は別経路で、launchd 常駐構成では実際に回るのは内蔵スケジューラ。
+実運用構成: API プロセスの `lifespan` 内で `BackgroundScheduler(timezone="UTC")` が `queue`(60秒)・`monitor`(180秒、`max_instances=1`, `coalesce=True`)・`news`(600秒、`max_instances=1`, `coalesce=True`)を登録。monitor は `auto_monitor_enabled`、news は `auto_news_enabled`(いずれも既定OFF)で内部ゲートされ、UIトグルONの時だけ実処理する。`daemon.run`(`BlockingScheduler` 版、CLI `xagent daemon`)は別経路で、launchd 常駐構成では実際に回るのは内蔵スケジューラ。
 
 ---
 
@@ -864,7 +894,7 @@ SQLite `xagent.db`(`DB_PATH` 既定)。容量上限 `MAX_DB_BYTES`(既定2GB)超
 | `API_TOKEN` | None | 設定時に全ルータ+`/me` `/status` で `X-API-Token` 必須(開放は `/health` と `/media/files` のみ)。空ならローカル開放 |
 | `TIMEZONE` | `Asia/Tokyo` | 運用タイムゾーン |
 
-設定の二重制御: 投稿の緊急停止は `POSTING_ENABLED`、絡み案の自動生成のオンオフは `MonitorSettings.auto_monitor_enabled`(既定OFF・UIトグル)。1日上限は `MAX_POSTS_PER_DAY`(自然)と `HARD_CAP_POSTS_PER_DAY`(ハード)の二段。
+設定の二重制御: 投稿の緊急停止は `POSTING_ENABLED`、絡み案の自動生成のオンオフは `MonitorSettings.auto_monitor_enabled`、ニュース速報の自動生成は `NewsSettings.auto_news_enabled`(いずれも既定OFF・UIトグル)。1日上限は `MAX_POSTS_PER_DAY`(自然)と `HARD_CAP_POSTS_PER_DAY`(ハード)の二段。
 
 ## 付録B. パッケージング・依存関係
 

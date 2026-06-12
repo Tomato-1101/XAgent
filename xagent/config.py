@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # 失敗時のみ公式Xにフォールバックする。未設定なら読み取りも公式X(オプトイン)。
     twitterapi_io_key: str | None = None
 
+    # --- XNewsBot 連携(ニュース速報の下書き生成) ---
+    # XNewsBot(別プロジェクト)のSQLiteを読み取り専用で参照する。書き込みは一切しない。
+    # 空文字/不在ならニュース生成は「未設定」エラーを返す(他機能には影響しない)。
+    xnewsbot_db_path: str = "/Users/tomato/Project/XNewsBot/xnewsbot.db"
+    news_interval_seconds: int = 600  # 新着ダイジェスト確認の間隔。実行可否は auto_news_enabled で制御
+
     # --- DB ---
     db_path: str = "xagent.db"
     # DBファイルの容量上限(バイト)。超えると古い端末状態(投稿済み/却下/取消)から物理削除する。

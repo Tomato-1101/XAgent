@@ -15,13 +15,14 @@ import re
 from sqlmodel import Session, select
 
 from .models import PromptTemplate, TemplateKind
-from .prompts import POST_PLAYBOOK, QUOTE_PLAYBOOK, REPLY_PLAYBOOK
+from .prompts import NEWS_PLAYBOOK, POST_PLAYBOOK, QUOTE_PLAYBOOK, REPLY_PLAYBOOK
 
 # シード(buzz-playbook由来)の型。name で既存判定し冪等に投入する。
 _BUILTIN = [
     ("バズの型 (buzz-playbook)", TemplateKind.POST, POST_PLAYBOOK),
     ("絡みリプの型 (R1〜R6)", TemplateKind.REPLY, REPLY_PLAYBOOK),
     ("引用RTの型", TemplateKind.QUOTE, QUOTE_PLAYBOOK),
+    ("ニュース速報の型 (N1〜N5)", TemplateKind.NEWS, NEWS_PLAYBOOK),
 ]
 
 
@@ -183,7 +184,7 @@ def seed_builtin_templates(session: Session) -> int:
             session.add(exists)
             session.commit()
     # 各kindに既定が無ければ、その kind の最初の型を既定にする
-    for kind in (TemplateKind.POST, TemplateKind.REPLY, TemplateKind.QUOTE):
+    for kind in (TemplateKind.POST, TemplateKind.REPLY, TemplateKind.QUOTE, TemplateKind.NEWS):
         has_active = session.exec(
             select(PromptTemplate)
             .where(PromptTemplate.kind == kind)

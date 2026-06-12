@@ -111,6 +111,7 @@ class TemplateKind(str, Enum):
     POST = "post"      # 通常投稿の型(バズの型A〜P/掴み)
     REPLY = "reply"    # 絡みリプの型(R1〜R6)
     QUOTE = "quote"    # 引用RTの型
+    NEWS = "news"      # ニュース速報の型(N1〜N5。大手の実投稿から抽出)
 
 
 class PromptTemplate(SQLModel, table=True):
@@ -191,6 +192,23 @@ class MonitorSettings(SQLModel, table=True):
     auto_post_enabled: bool = True
     # 1監視サイクルで作る下書きの総数上限。一気に生成しすぎてAPIを圧迫しないための安全弁。
     max_drafts_per_run: int = 10
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class NewsSettings(SQLModel, table=True):
+    """ニュース速報投稿(XNewsBot連携)の設定。単一行(id=1)。
+
+    XNewsBot(別プロジェクト)が朝夕に収集したニュースDBを読み取り専用で参照し、
+    対象ジャンルの新着から速報風の下書きを生成する。生成は下書きまで(投稿は人間承認必須)。
+    自動生成はダイジェスト連動(新着が現れたときだけ)で、トグル既定OFF(乱造防止)。
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    auto_news_enabled: bool = False
+    genres_json: str = '["AI", "テクノロジー"]'  # 対象ジャンル(XNewsBotのジャンル名)
+    max_posts_per_run: int = 3  # 1回の生成で作る下書きの上限(乱造防止の安全弁)
+    # 処理済みの XNewsBot genredigest.id。これ以下のダイジェストは生成済みとして再処理しない。
+    last_digest_id: int = 0
     updated_at: datetime = Field(default_factory=_utcnow)
 
 

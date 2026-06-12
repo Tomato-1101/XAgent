@@ -147,6 +147,12 @@ class MonitorSettingsRequest(BaseModel):
     max_drafts_per_run: int | None = None  # 1監視サイクルの総生成数上限
 
 
+class NewsSettingsRequest(BaseModel):
+    auto_news_enabled: bool | None = None  # ダイジェスト連動の自動下書き生成(既定OFF)
+    genres_json: str | None = None         # 対象ジャンル(JSON配列文字列)
+    max_posts_per_run: int | None = None   # 1回の生成上限
+
+
 class UpdateDraftRequest(BaseModel):
     segments: list[str] | None = None
     scheduled_at: datetime | None = None

@@ -379,3 +379,124 @@ reply / quote の判断基準:
             if len(out) >= max_n:
                 break
         return out
+
+    # --- ニュース速報のバッチ生成(記事選定・型選択・本文生成まで1回で行う) ---
+    _NEWS_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "posts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "news_index": {"type": "integer"},
+                        "format": {"type": "string", "enum": ["post", "quote"]},
+                        "text": {"type": "string"},
+                        "source_url": {"type": ["string", "null"]},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["news_index", "format", "text", "source_url", "reason"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["posts"],
+        "additionalProperties": False,
+    }
+
+    def generate_news_posts(
+        self,
+        items: list[dict],
+        max_n: int,
+        style_guide: str = "",
+        examples: list[str] | None = None,
+        playbook: str = "",
+    ) -> list[dict]:
+        """新着ニュース一覧から速報価値の高い記事を最大 max_n 件選び、速報投稿の本文まで作る。
+
+        1回のバッチ判断で「どの記事を投稿するか」「通常投稿(post)か元ポストの引用RT(quote)か」
+        「型(N1〜N5)の適用と本文」まで生成する(絡みの select_engagements と同じ構造)。
+        items は news.py が渡す {index, genre, importance, title, summary, detail,
+        source_url, source_tweet(url/text/views), top_view_count} のリスト。
+        返り値は {news_index, format, text, source_url, reason, item} のリスト。
+        """
+        if not items or max_n <= 0:
+            return []
+        blocks = []
+        if playbook.strip():
+            blocks.append(f"## 速報の型(本文はこれに沿う)\n{playbook.strip()}")
+        sb = _style_block(style_guide, examples)
+        if sb:
+            blocks.append(sb)
+        guide = "\n\n".join(blocks)
+        system = f"""あなたは日本語Xアカウントの運用アシスタント。新着ニュース一覧から「速報として投稿する価値が高い記事」を最大{max_n}件選び、それぞれ速報投稿の本文を作る。
+
+選定ルール:
+- 速報価値(新しさ・大きさ・読者への影響)が高い記事だけ選ぶ。無理に{max_n}件埋めない。
+- 同じ話題の重複記事は1つにまとめる(最も情報量の多い記事を採用)。
+- top_view_count(元ポストの閲覧数)が大きい記事は関心が実証されている=優先。
+
+format の判断基準:
+- post: 通常投稿。これが主力・デフォルト。
+- quote: source_tweet(一次情報の元ポスト)があり、それを引用RTで見せる方が伝わる記事
+  (公式発表のポスト・画像/動画付きの一次情報など)。引用なら元ポストの画像も表示される。
+
+本文ルール:
+- 速報の型(N1〜N5)から記事の性質に合うものを1つ選び、その構成・トーンで書く。
+- 事実は与えられた記事の範囲のみ。数字・固有名詞・発言を創作しない。
+- ソースURLは本文に入れない(リーチ減点)。source_url フィールドにURLを返せば
+  2ツイート目(リプ欄)として投稿される。出典を添える価値がある記事だけ返す(不要なら null)。
+- quote のときは引用元が見えるため、本文は元ポストの要約でなく自分の速報文にする。
+- reason には選んだ理由と使った型(N1〜N5)を日本語で簡潔に書く。
+
+{guide}""".strip()
+        lines = []
+        for it in items:
+            row = {
+                "news_index": it["index"],
+                "genre": it.get("genre", ""),
+                "importance": it.get("importance", ""),
+                "title": it.get("title", ""),
+                "summary": it.get("summary", ""),
+                "detail": (it.get("detail") or "")[:600],
+                "source_url": it.get("source_url"),
+                "source_tweet": it.get("source_tweet"),
+                "top_view_count": it.get("top_view_count", 0),
+            }
+            lines.append(json.dumps(row, ensure_ascii=False))
+        user = "新着ニュース一覧(1行1件のJSON):\n" + "\n".join(lines)
+        data = self._run_structured(
+            system, user, self._NEWS_SCHEMA,
+            timeout=self.settings.claude_cli_select_timeout_seconds,
+        )
+        by_index = {it["index"]: it for it in items}
+        out: list[dict] = []
+        seen: set[int] = set()
+        for p in (data or {}).get("posts", []):
+            idx = p.get("news_index")
+            item = by_index.get(idx)
+            if item is None or idx in seen:
+                continue
+            text = str(p.get("text", "")).strip()
+            if not text:
+                continue
+            fmt = str(p.get("format", "")).strip().lower()
+            if fmt not in ("post", "quote"):
+                fmt = "post"
+            if fmt == "quote" and not (item.get("source_tweet") or {}).get("url"):
+                fmt = "post"  # 引用先が無いのに quote を選んだ場合は通常投稿に落とす
+            url = p.get("source_url")
+            seen.add(idx)
+            out.append(
+                {
+                    "news_index": idx,
+                    "format": fmt,
+                    "text": text,
+                    "source_url": str(url).strip() if url else None,
+                    "reason": str(p.get("reason", "")).strip(),
+                    "item": item,
+                }
+            )
+            if len(out) >= max_n:
+                break
+        return out

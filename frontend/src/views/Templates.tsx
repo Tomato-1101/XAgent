@@ -9,8 +9,14 @@ const KINDS: { key: TemplateKind; label: string }[] = [
   { key: "post", label: "投稿" },
   { key: "reply", label: "リプライ" },
   { key: "quote", label: "引用RT" },
+  { key: "news", label: "ニュース速報" },
 ];
-const KIND_LABEL: Record<TemplateKind, string> = { post: "投稿", reply: "リプライ", quote: "引用RT" };
+const KIND_LABEL: Record<TemplateKind, string> = {
+  post: "投稿",
+  reply: "リプライ",
+  quote: "引用RT",
+  news: "ニュース速報",
+};
 
 export default function Templates() {
   const toast = useToast();

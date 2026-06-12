@@ -46,6 +46,8 @@ class FakeFormatter:
         self.engage_kind_return = "reply"  # select_engagements の既定の型(テストで切替)
         self.select_calls = []       # select_engagements の呼び出し内容を記録(検証用)
         self.select_return = None    # set すると select_engagements がこれを返す
+        self.news_calls = []         # generate_news_posts の呼び出し内容を記録(検証用)
+        self.news_return = None      # set すると generate_news_posts がこれを返す
 
     def format_post(
         self, source_text, style_guide="", allow_long=False,
@@ -90,6 +92,19 @@ class FakeFormatter:
                 "reason": "テスト選定", "candidate": c,
             }
             for c in candidates[:max_n]
+        ]
+
+    def generate_news_posts(self, items, max_n, style_guide="", examples=None, playbook=""):
+        self.news_calls.append({"items": list(items), "max_n": max_n, "playbook": playbook})
+        if self.news_return is not None:
+            return self.news_return
+        return [
+            {
+                "news_index": it["index"], "format": "post",
+                "text": f"【速報】{it['title']}",
+                "source_url": None, "reason": "テスト選定(N2)", "item": it,
+            }
+            for it in items[:max_n]
         ]
 
     def complete(self, system, user):

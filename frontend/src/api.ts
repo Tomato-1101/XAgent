@@ -10,6 +10,8 @@ import type {
   Me,
   MediaItem,
   MonitorSettings,
+  NewsRecentResponse,
+  NewsSettings,
   PreviewResponse,
   PromptTemplate,
   RecentPost,
@@ -323,6 +325,16 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(flags),
     }),
+
+  // ニュース速報(XNewsBot連携): 新着から速報下書きを生成。ジョブ開始のみ(追跡は pollJob)。
+  newsRunOnceStart: (limit?: number) =>
+    req<{ job_id: string }>(`/news/run-once${limit != null ? `?limit=${limit}` : ""}`, {
+      method: "POST",
+    }),
+  newsRecent: () => req<NewsRecentResponse>("/news/recent"),
+  getNewsSettings: () => req<NewsSettings>("/news/settings"),
+  putNewsSettings: (values: Partial<NewsSettings>) =>
+    req<NewsSettings>("/news/settings", { method: "PUT", body: JSON.stringify(values) }),
 
   listProfiles: () => req<AccountProfile[]>("/profiles"),
   learnProfile: (handle: string, max_total = 200, is_self = false) =>

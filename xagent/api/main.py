@@ -31,6 +31,7 @@ from .routes import (
     lists,
     media,
     monitor,
+    news,
     posts,
     profiles,
     schedule,
@@ -55,7 +56,7 @@ async def lifespan(app: FastAPI):
         # 自動投稿はしない。
         from apscheduler.schedulers.background import BackgroundScheduler
 
-        from ..daemon import monitor_tick, queue_tick
+        from ..daemon import monitor_tick, news_tick, queue_tick
 
         sched = BackgroundScheduler(timezone="UTC")
         # 予約投稿の発火: 常時。posting_enabled/認証・予約/制限帯/頻度ガードを通すので誤爆しない。
@@ -69,6 +70,13 @@ async def lifespan(app: FastAPI):
         sched.add_job(
             monitor_tick, "interval",
             seconds=settings.monitor_interval_seconds, id="monitor",
+            max_instances=1, coalesce=True,
+        )
+        # ニュース速報の自動生成(ダイジェスト連動): auto_news_enabled(既定OFF)で内部制御。
+        # ONでも新着ダイジェストが無ければ即return(XNewsBotのDBを読むだけでAPI消費なし)。
+        sched.add_job(
+            news_tick, "interval",
+            seconds=settings.news_interval_seconds, id="news",
             max_instances=1, coalesce=True,
         )
         sched.start()
@@ -183,6 +191,7 @@ app.include_router(media.router)
 app.include_router(analytics.router)
 app.include_router(lists.router)
 app.include_router(templates.router)
+app.include_router(news.router)
 app.include_router(jobs_router)
 
 # 添付画像/動画のプレビュー配信(ローカル)。アップロードAPIは /media/upload、配信は /media/files。

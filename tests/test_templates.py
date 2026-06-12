@@ -45,13 +45,14 @@ def test_resolve_body_none_and_missing(session):
 
 def test_seed_builtin_is_idempotent(session):
     n1 = templates_mod.seed_builtin_templates(session)
-    assert n1 == 3                                        # post/reply/quote の3件
+    assert n1 == 4                                        # post/reply/quote/news の4件
     n2 = templates_mod.seed_builtin_templates(session)    # 再実行で重複投入しない
     assert n2 == 0
-    assert len(templates_mod.list_templates(session)) == 3
+    assert len(templates_mod.list_templates(session)) == 4
     # 各kindに既定(active)が立つ
     assert templates_mod.active_body(session, TemplateKind.POST) != ""
     assert templates_mod.active_body(session, TemplateKind.REPLY) != ""
+    assert templates_mod.active_body(session, TemplateKind.NEWS) != ""
 
 
 def test_seed_builtin_syncs_body_for_builtin(session):

@@ -114,6 +114,37 @@ export interface MonitorSettings {
   updated_at?: string;
 }
 
+export interface NewsSettings {
+  id?: number;
+  auto_news_enabled: boolean; // ダイジェスト連動の自動下書き生成(既定OFF)
+  genres_json: string; // 対象ジャンル(JSON配列文字列)
+  max_posts_per_run: number; // 1回の生成上限
+  last_digest_id: number; // 処理済みのXNewsBotダイジェストID
+  updated_at?: string;
+}
+
+export interface NewsItem {
+  index: number;
+  digest_id: number;
+  digest_date: string;
+  slot: string;
+  genre: string;
+  importance: string;
+  title: string;
+  summary: string;
+  detail: string;
+  source_url: string | null;
+  source_tweet: { url: string; author: string; text: string; views: number } | null;
+  top_view_count: number;
+}
+
+export interface NewsRecentResponse {
+  available: boolean;
+  error: string | null;
+  items: NewsItem[];
+  last_digest_id: number;
+}
+
 export type MediaKind = "image" | "video" | "other";
 
 export interface MediaItem {
@@ -193,7 +224,7 @@ export interface ListCreateResult {
   skipped: { handle: string; reason: string }[];
 }
 
-export type TemplateKind = "post" | "reply" | "quote";
+export type TemplateKind = "post" | "reply" | "quote" | "news";
 
 export interface PromptTemplate {
   id: number;

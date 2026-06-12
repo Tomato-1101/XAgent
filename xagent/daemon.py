@@ -52,6 +52,28 @@ def monitor_tick() -> None:
         log.exception("monitor_tick failed")
 
 
+def news_tick() -> None:
+    """ニュース速報の自動下書き生成(ダイジェスト連動)。auto_news_enabled(既定OFF)で制御。
+
+    ONでも新着ダイジェストが無ければ何もしない(XNewsBotのDBを読み取り専用で覗くだけ)。
+    生成は下書きまで(投稿は人間承認必須)。
+    """
+    from .news import NewsSourceUnavailable, get_news_settings, run_news_once
+
+    try:
+        with get_session() as s:
+            if not get_news_settings(s).auto_news_enabled:
+                return
+            res = run_news_once(s, Formatter())
+            if res["created"]:
+                notify("XAgent: ニュース速報案", f"{res['created']}件の下書きを生成しました")
+            log.info("news_tick: %s", res)
+    except NewsSourceUnavailable as e:
+        log.warning("news_tick: %s", e)
+    except Exception:
+        log.exception("news_tick failed")
+
+
 def queue_tick() -> None:
     # 予約投稿の発火は常時動かす(ユーザー方針: 予約投稿は止めない)。
     # 全投稿の緊急停止は config.posting_enabled が、個別の制限帯/頻度ガードは process_due_queue が担う。
