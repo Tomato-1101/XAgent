@@ -191,6 +191,9 @@ def create_reply_draft(
     target_text: str,
     target_handle: str | None = None,
     target_created_at: datetime | None = None,
+    target_view_count: int | None = None,
+    target_like_count: int | None = None,
+    target_retweet_count: int | None = None,
 ) -> Draft:
     res = formatter.generate_reply(
         target_text, target_handle or "", active_style_guide(session),
@@ -204,6 +207,9 @@ def create_reply_draft(
         target_handle=target_handle,
         target_text=target_text,  # 元ポスト本文を表示用に保持(人間が承認判断できるように)
         target_created_at=to_naive_utc(target_created_at),  # 元投稿の投稿時刻(取得できた時のみ)
+        target_view_count=target_view_count,      # 元投稿のインプレッション(取得できた時のみ)
+        target_like_count=target_like_count,
+        target_retweet_count=target_retweet_count,
     )
     return _finalize_draft(session, formatter, draft, "reply")
 
@@ -274,11 +280,14 @@ def create_engage_draft_from_text(
     target_handle: str | None = None,
     target_created_at: datetime | None = None,
     reason: str = "",
+    target_view_count: int | None = None,
+    target_like_count: int | None = None,
+    target_retweet_count: int | None = None,
 ) -> Draft:
     """AIのバッチ選定(formatter.select_engagements)で本文まで生成済みの絡み案をDraft化する。
 
     本文は確定済みなのでLLMは呼ばない(二重生成防止)。選定理由は source_text に保持し、
-    Inboxで人間が承認判断する材料にする。
+    元投稿のエンゲージ指標(インプレッション等)も保存して、Inboxで人間が承認判断する材料にする。
     """
     if kind not in (DraftKind.REPLY, DraftKind.QUOTE):
         raise PolicyViolation("絡み案はリプライか引用RTのみ作成できます。")
@@ -291,6 +300,9 @@ def create_engage_draft_from_text(
         target_handle=target_handle,
         target_text=target_text,  # 元ポスト本文を表示用に保持(人間が承認判断できるように)
         target_created_at=to_naive_utc(target_created_at),
+        target_view_count=target_view_count,      # 元投稿のインプレッション(取得できた時のみ)
+        target_like_count=target_like_count,
+        target_retweet_count=target_retweet_count,
     )
     session.add(draft)
     session.commit()

@@ -21,6 +21,9 @@ class DraftRead(BaseModel):
     target_handle: str | None
     target_text: str = ""  # 絡む相手の元ポスト本文(reply/quote/repost の表示用)
     target_created_at: datetime | None = None  # 元ポストの投稿時刻(取得できた時のみ)
+    target_view_count: int | None = None       # 元ポストのインプレッション(取得できた時のみ)
+    target_like_count: int | None = None
+    target_retweet_count: int | None = None
     scheduled_at: datetime | None
     posted_at: datetime | None
     posted_tweet_id: str | None
@@ -42,6 +45,9 @@ def draft_to_read(d: Draft) -> DraftRead:
         target_handle=d.target_handle,
         target_text=d.target_text,
         target_created_at=d.target_created_at,
+        target_view_count=d.target_view_count,
+        target_like_count=d.target_like_count,
+        target_retweet_count=d.target_retweet_count,
         scheduled_at=d.scheduled_at,
         posted_at=d.posted_at,
         posted_tweet_id=d.posted_tweet_id,

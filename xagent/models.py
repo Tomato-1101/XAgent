@@ -50,6 +50,11 @@ class Draft(SQLModel, table=True):
     target_text: str = ""
     # 元ポストが投稿された時刻(naive UTC)。取得できた時のみ。案の鮮度判断に使う(古い投稿への絡みは効果が薄い)。
     target_created_at: datetime | None = None
+    # 元ポストのエンゲージ指標(取得できた時のみ=None は不明)。絡み案の承認判断材料として表示する。
+    # view_count=インプレッション。twitterapi.io 経由でのみ取れ、公式APIフォールバック経路では None。
+    target_view_count: int | None = None
+    target_like_count: int | None = None
+    target_retweet_count: int | None = None
 
     scheduled_at: datetime | None = None  # 指定時刻/最適時間の予約
     posted_at: datetime | None = None

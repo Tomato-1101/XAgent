@@ -40,6 +40,15 @@ export function charCount(text: string): number {
   return [...text].length;
 }
 
+/** エンゲージ数の表示。1万以上は「1.2万」、未満はカンマ区切り(X本体の見え方に寄せる)。 */
+function fmtMetric(n: number): string {
+  if (n >= 10000) {
+    const man = n / 10000;
+    return `${man >= 100 ? Math.round(man) : Math.round(man * 10) / 10}万`;
+  }
+  return n.toLocaleString("ja-JP");
+}
+
 /** 元ポスト(返信先/引用元/リポスト元)へのリンク。handleが無くてもidで開ける。 */
 function origTweetUrl(d: Draft): string | null {
   if (!d.target_tweet_id) return null;
@@ -180,6 +189,22 @@ export function DraftCard({
             )}
           </div>
           <div className="whitespace-pre-wrap break-words text-zinc-400">{draft.target_text}</div>
+          {/* 元ポストのエンゲージ指標(取得できた時のみ)。バズ度・絡む価値の判断材料。 */}
+          {(draft.target_view_count != null ||
+            draft.target_like_count != null ||
+            draft.target_retweet_count != null) && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+              {draft.target_view_count != null && (
+                <span title="インプレッション(閲覧数)">👁 {fmtMetric(draft.target_view_count)}</span>
+              )}
+              {draft.target_like_count != null && (
+                <span title="いいね">❤ {fmtMetric(draft.target_like_count)}</span>
+              )}
+              {draft.target_retweet_count != null && (
+                <span title="リポスト">🔁 {fmtMetric(draft.target_retweet_count)}</span>
+              )}
+            </div>
+          )}
         </div>
       )}
 

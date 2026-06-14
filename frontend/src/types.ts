@@ -12,6 +12,9 @@ export interface Draft {
   target_handle: string | null;
   target_text: string; // 絡む相手の元ポスト本文(reply/quote/repost の表示用)
   target_created_at: string | null; // 元ポストの投稿時刻(naive UTC ISO / 取得できた時のみ)
+  target_view_count: number | null; // 元ポストのインプレッション(取得できた時のみ)
+  target_like_count: number | null;
+  target_retweet_count: number | null;
   scheduled_at: string | null;
   posted_at: string | null;
   posted_tweet_id: string | null;

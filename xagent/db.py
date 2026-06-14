@@ -40,6 +40,9 @@ _ADDED_COLUMNS = {
         ("target_text", "VARCHAR", "DEFAULT ''"),
         ("target_created_at", "TIMESTAMP", ""),
         ("schedule_missed", "BOOLEAN", "DEFAULT 0"),
+        ("target_view_count", "INTEGER", ""),
+        ("target_like_count", "INTEGER", ""),
+        ("target_retweet_count", "INTEGER", ""),
     ],
     "monitorsettings": [
         ("max_drafts_per_run", "INTEGER", "DEFAULT 10"),

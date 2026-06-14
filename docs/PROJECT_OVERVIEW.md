@@ -128,6 +128,9 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `target_handle` | `str?` | `None` | 表示用ハンドル |
 | `target_text` | `str` | `""` | 絡む相手の元ポスト本文(`source_text` とは別) |
 | `target_created_at` | `datetime?` | `None` | 元ポストの投稿時刻(naive UTC、取得できた時のみ)。鮮度判断用 |
+| `target_view_count` | `int?` | `None` | 元ポストのインプレッション(取得できた時のみ=None は不明)。絡み案の承認判断材料として表示。twitterapi.io 経由でのみ取れ、公式APIフォールバック経路では None |
+| `target_like_count` | `int?` | `None` | 元ポストのいいね数(取得できた時のみ) |
+| `target_retweet_count` | `int?` | `None` | 元ポストのリポスト数(取得できた時のみ) |
 | `scheduled_at` | `datetime?` | `None` | 予約時刻/最適時間 |
 | `posted_at` | `datetime?` | `None` | 投稿完了時刻 |
 | `posted_tweet_id` | `str?` | `None` | 投稿後のツイートID |
@@ -267,7 +270,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 
 `create_all` が既存テーブルに列追加しない欠点を補うのが `_migrate()`。`_ADDED_COLUMNS` は `{テーブル名: [(列名, SQLite型, デフォルト句), ...]}` で、`PRAGMA table_info` で既存列を調べ、無い列だけ `ALTER TABLE ... ADD COLUMN` する(前方追加専用。型変更・列削除・データ移行はしない)。
 
-`_ADDED_COLUMNS` の全列: `pastpost`(`author_user_id`/`author_handle`/`is_own DEFAULT 1`)、`draft`(`blackout_override DEFAULT 0`/`target_text DEFAULT ''`/`target_created_at`/`schedule_missed DEFAULT 0`)、`monitorsettings`(`max_drafts_per_run DEFAULT 10`/`auto_monitor_enabled DEFAULT 1`/`auto_post_enabled DEFAULT 1`/`min_impressions DEFAULT 10000`/`celeb_watch_enabled DEFAULT 0`/`celeb_list_id`/`buzz_watch_enabled DEFAULT 0`/`buzz_min_faves DEFAULT 3000`)、`engagetarget`(`list_id`)。
+`_ADDED_COLUMNS` の全列: `pastpost`(`author_user_id`/`author_handle`/`is_own DEFAULT 1`)、`draft`(`blackout_override DEFAULT 0`/`target_text DEFAULT ''`/`target_created_at`/`schedule_missed DEFAULT 0`/`target_view_count`/`target_like_count`/`target_retweet_count`)、`monitorsettings`(`max_drafts_per_run DEFAULT 10`/`auto_monitor_enabled DEFAULT 1`/`auto_post_enabled DEFAULT 1`/`min_impressions DEFAULT 10000`/`celeb_watch_enabled DEFAULT 0`/`celeb_list_id`/`buzz_watch_enabled DEFAULT 0`/`buzz_min_faves DEFAULT 3000`)、`engagetarget`(`list_id`)。
 
 ハマりどころ: **モデルに新フィールドを足したら、既存DBへ反映するには `_ADDED_COLUMNS` への追記も必要**(`create_all` だけでは既存テーブルに列が増えない)。
 
@@ -615,7 +618,7 @@ Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯�
 
 ### 主要共通コンポーネント
 
-- **DraftCard**: 下書き1件の中核カード。種別/ステータスバッジ、`schedule_missed` の「予約失効」バッジ、元ポスト表示(reply/quote/repost)、メディアプレビュー。編集可否 `canEdit = onUpdated && kind !== "repost" && status ∈ {draft,approved,queued}`。字数表示は **コードポイント数**(`[...text].length`)、140字超で赤。
+- **DraftCard**: 下書き1件の中核カード。種別/ステータスバッジ、`schedule_missed` の「予約失効」バッジ、元ポスト表示(reply/quote/repost)、元ポストのエンゲージ指標(👁インプレッション/❤いいね/🔁リポスト。`target_view_count` 等が非nullの時だけ表示。`fmtMetric` で1万以上は「1.2万」表記)、メディアプレビュー。編集可否 `canEdit = onUpdated && kind !== "repost" && status ∈ {draft,approved,queued}`。字数表示は **コードポイント数**(`[...text].length`)、140字超で赤。
 - **SchedulePicker**: `datetime-local` 代替。JST 壁時計の `"YYYY-MM-DDTHH:MM"`。クイック(1h後/3h後/今夜21時/明日8時)+おすすめ時間チップ+日付/時刻ドロップダウン(15分刻み、2週間先まで)。
 - **BlackoutGate / useBlackoutGate**: 上記の二段階確認ゲート。`element` を画面に一度描画しておく必要がある。
 - **ConfirmDialog**: 誤投稿防止モーダル。**既定フォーカスはキャンセルボタン**(Enter連打誤送信防止)。背景クリック・Escape はキャンセル扱い。
@@ -684,7 +687,7 @@ CLI とほぼ対応する。差分・専用ツール:
 1. **メンション(`poll_mentions`、トグル `mentions_enabled`・既定OFF=手動で返す方針)**: 従来通り `MonitorCursor`(stream=`"mentions"`)の `since_id` で重複を防ぎ、1件ずつ `create_reply_draft` で返信案を作る(自分宛は引用RTしないので `quote_suggestions` には乗らない)。`_cap_oldest(tweets, limit)` は超過時に **id 昇順(古い順)**で先頭 `limit` 件だけ残し、カーソルを最新まで飛ばさないため新着は次サイクルで再取得される。
 2. **候補収集(`collect_engage_candidates`)**: 全有効ソース(手動MANUAL/リストLIST=トグル `manual_targets_enabled` が両方を支配、ジャンルGENRE=`keyword_search_enabled`、フォロー中=`following_enabled`)から**直近24時間(`TARGET_MAX_AGE_HOURS=24`)の本人オリジナル投稿**を集める。**since_id カーソルは使わない**(24時間窓で毎回取り直す)。除外は3段: (a)**リポスト除外(`_drop_reposts`)**=正規化辞書の `is_repost`(twitterapi.io は `retweeted_tweet`/`quoted_tweet` の有無、公式API は `referenced_tweets` の type=retweeted/quoted)＋後方互換の本文 `RT @` 始まり、(b)**既に同じ tweet を対象にした Draft があれば状態問わず除外**(REJECTED 含む=却下済みへの再生成をしない・乱造防止と重複防止を兼ねる)、(c)ソース横断の tweet_id 重複排除、(d)**最低インプレッション(`min_impressions`、既定10000)未満を除外**(`view_count` が None=判定不能の投稿は `_within_age` と同じ思想で通す)。候補は新しい順(id降順)に `SELECT_MAX_CANDIDATES=120` 件まで(LLM入力の安全弁)。候補には `like_count`/`retweet_count`(twitterapi.io の `_norm` が保持)も載せ、伸び始め判断の材料にする。
 3. **バッチAI選定(`formatter.select_engagements`)**: 候補一覧を1回のLLM呼び出し(JSONスキーマ強制)に渡し、「どの投稿に絡むか(**同一アカウントは原則1件・最大2件**=分散)」「reply / quote のどちらか(迷えば reply)」「本文(140字厳守)」「選定理由」までまとめて生成する。コード側でも検証(候補に無いID破棄・140字超破棄・kind正規化・同一アカウント3件目以降破棄・`max_n`=残バジェットで打ち切り)。
-4. **Draft化(`service.create_engage_draft_from_text`)**: 本文は生成済みなので**LLMを呼ばずに** `status=DRAFT` の下書きを作る。選定理由は `source_text` に `[AI選定理由] ...` として保持(Inboxの承認判断材料)。型を変えたいときは従来通り Inbox の切替ボタン=`recast_engage_draft`。
+4. **Draft化(`service.create_engage_draft_from_text`)**: 本文は生成済みなので**LLMを呼ばずに** `status=DRAFT` の下書きを作る。選定理由は `source_text` に `[AI選定理由] ...` として保持(Inboxの承認判断材料)。元投稿のエンゲージ指標(`target_view_count`/`target_like_count`/`target_retweet_count`=候補の view/like/retweet)も保存し、DraftCard でインプレッション等を表示する。型を変えたいときは従来通り Inbox の切替ボタン=`recast_engage_draft`。
 
 重要な不変条件:
 - 投稿はせず未承認下書き(`status=DRAFT`)を生成するだけ(自動投稿しない)。

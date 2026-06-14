@@ -446,6 +446,10 @@ def test_buzz_run_once_creates_drafts(session, fake_formatter):
     assert res == {"candidates": 1, "reply_suggestions": 1, "quote_suggestions": 0}
     d = session.exec(select(Draft).where(Draft.kind == DraftKind.REPLY)).one()
     assert d.target_tweet_id == "601"
+    # 元投稿のエンゲージ指標(インプレッション等)が下書きに保存され、Inboxで表示できる
+    assert d.target_view_count == 500000
+    assert d.target_like_count == 8000
+    assert d.target_retweet_count == 0
     call = fake_formatter.select_calls[0]
     assert call["max_n"] == monitor.BUZZ_MAX_PER_TICK
     assert "バズ" in call["candidates"][0]["note"]

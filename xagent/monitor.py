@@ -163,6 +163,8 @@ def poll_mentions(
         create_reply_draft(
             session, formatter, t["id"], t.get("text", ""),
             target_handle=t.get("author_id"), target_created_at=t.get("created_at"),
+            target_view_count=t.get("view_count"), target_like_count=t.get("like_count"),
+            target_retweet_count=t.get("retweet_count"),
         )
         created += 1
     new_max = _max_id([t["id"] for t in tweets])
@@ -353,6 +355,9 @@ def run_once(
                     target_handle=cand.get("handle"),
                     target_created_at=cand.get("created_at"),
                     reason=s.get("reason", ""),
+                    target_view_count=cand.get("view_count"),
+                    target_like_count=cand.get("like_count"),
+                    target_retweet_count=cand.get("retweet_count"),
                 )
                 if kind == DraftKind.QUOTE:
                     quotes += 1
@@ -450,6 +455,9 @@ def run_celeb_once(
                 target_handle=cand.get("handle"),
                 target_created_at=cand.get("created_at"),
                 reason=s.get("reason", ""),
+                target_view_count=cand.get("view_count"),
+                target_like_count=cand.get("like_count"),
+                target_retweet_count=cand.get("retweet_count"),
             )
             if kind == DraftKind.QUOTE:
                 quotes += 1
@@ -540,6 +548,9 @@ def run_buzz_once(
                 target_handle=cand.get("handle"),
                 target_created_at=cand.get("created_at"),
                 reason=s.get("reason", ""),
+                target_view_count=cand.get("view_count"),
+                target_like_count=cand.get("like_count"),
+                target_retweet_count=cand.get("retweet_count"),
             )
             if kind == DraftKind.QUOTE:
                 quotes += 1
