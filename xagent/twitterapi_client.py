@@ -11,10 +11,13 @@ XClient 側が公式APIにフォールバックする(本クライアントは�
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Callable
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.twitterapi.io"
 _MAX_PAGES = 10  # ページネーションの安全弁(無限ループ防止)
@@ -253,3 +256,61 @@ class TwitterApiIoClient:
                 break
             cursor = data["next_cursor"]
         return out
+
+
+# XClient が backend として呼ぶ読み取りメソッド(MultiTwitterApiIoClient が委譲する対象)。
+_BACKEND_METHODS = (
+    "get_tweet",
+    "get_user_by_username",
+    "get_user_timeline",
+    "search_recent",
+    "get_mentions",
+    "get_user_tweets_full",
+    "get_following",
+    "get_list_members",
+)
+
+
+class MultiTwitterApiIoClient:
+    """複数の TwitterApiIoClient を優先度順に試すフォールバック・チェーン。
+
+    TwitterApiIoClient と同じ読み取りメソッドを公開し、各呼び出しで登録順(=優先度昇順)に
+    各キーを試す。あるキーが TwitterApiIoError(残高切れ・タイムアウト・応答不正等)を返したら
+    次のキーへ。全キー失敗で最後のエラーを送出する → XClient が公式APIへフォールバックする。
+    XClient._read からは単一クライアントと区別なく扱える(読み取りメソッドのシグネチャが同一)。
+    """
+
+    def __init__(self, clients: list[TwitterApiIoClient]) -> None:
+        if not clients:
+            raise ValueError("MultiTwitterApiIoClient は最低1つのクライアントが必要です。")
+        self._clients = clients
+
+    def _try(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        last_exc: TwitterApiIoError | None = None
+        for i, client in enumerate(self._clients):
+            try:
+                return getattr(client, method)(*args, **kwargs)
+            except TwitterApiIoError as e:
+                last_exc = e
+                # 次のキーがあるなら警告だけ出して継続(最後のキーまで失敗したら送出する)。
+                if i + 1 < len(self._clients):
+                    logger.warning(
+                        "twitterapi.io キー%d/%d で %s 失敗→次のキーへ: %s",
+                        i + 1, len(self._clients), method, e,
+                    )
+        raise last_exc or TwitterApiIoError(f"twitterapi.io {method}: 全キー失敗")
+
+
+# 各読み取りメソッドを動的に生成して MultiTwitterApiIoClient に付与する。
+# (8メソッドとも「優先度順に試して最初の成功を返す」だけで本体が同一のため、
+#  ボイラープレートを避けて _try への委譲で揃える。)
+def _make_proxy(name: str):
+    def proxy(self, *args: Any, **kwargs: Any) -> Any:
+        return self._try(name, *args, **kwargs)
+
+    proxy.__name__ = name
+    return proxy
+
+
+for _m in _BACKEND_METHODS:
+    setattr(MultiTwitterApiIoClient, _m, _make_proxy(_m))

@@ -232,6 +232,19 @@ export interface ListCreateResult {
   skipped: { handle: string; reason: string }[];
 }
 
+// twitterapi.io 読み取りキー(複数・優先度順フォールバック)。平文キーは返らずマスクのみ。
+export interface TwitterApiKey {
+  id: number;
+  label: string;
+  key_masked: string; // 例: ••••••3f9c
+  priority: number; // 小さいほど優先(一覧は昇順)
+  enabled: boolean;
+  last_ok_at: string | null; // 最後に疎通成功した時刻(naive UTC ISO)
+  last_error: string | null; // 最後の疎通失敗の内容
+  created_at: string;
+  updated_at: string;
+}
+
 export type TemplateKind = "post" | "reply" | "quote" | "news";
 
 export interface PromptTemplate {

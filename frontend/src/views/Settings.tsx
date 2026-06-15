@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { Button, Card, Input, Spinner, Switch } from "../components/ui";
 import { useToast } from "../components/Toast";
+import { TwitterApiKeys } from "../components/TwitterApiKeys";
 import type { BlackoutSettings, MonitorSettings } from "../types";
 
 const TOGGLES: { key: keyof MonitorSettings; label: string; hint: string }[] = [
@@ -344,6 +345,9 @@ export default function Settings() {
           <div className="text-sm text-zinc-500">読み込み中…</div>
         )}
       </Card>
+
+      {/* twitterapi.io 読み取りキー(複数・優先度順フォールバック) */}
+      <TwitterApiKeys />
 
       {/* 制限時間帯(ブラックアウト) */}
       <Card className="space-y-4">

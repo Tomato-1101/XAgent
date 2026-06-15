@@ -37,7 +37,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 
 - **完全自動はしない(承認ゲート)**。X 規約上、自動いいね/フォロー/RT/一斉リプライは禁止のため、AI は下書き(`status=DRAFT`)を作るだけで投稿はしない。投稿経路は `service.post_draft` に集約され、CLI/API/MCP/scheduler の全経路がこのガードを通る(§5, §6)。
 - **書き込みは公式 X API のみ**。自分のアカウント操作(投稿/リプライ/引用/リポスト/リスト書込)はすべて tweepy(公式 X API、OAuth1.0a)で行う。非公式 API で自アカウントを操作すると BAN リスクがあるため(`x_client.py` / `twitterapi_client.py` docstring)。
-- **twitterapi.io は読み取り専用**。他人の投稿の読み取り(元投稿取得・監視・検索・学習)はコスト削減のため twitterapi.io を優先し、`TwitterApiIoError` 等の失敗時のみ公式 X へフォールバックする。読み取りは資格情報を使わないため BAN とは無関係。`TWITTERAPI_IO_KEY` 未設定なら読み取りも全て公式 X(オプトイン方式)。
+- **twitterapi.io は読み取り専用**。他人の投稿の読み取り(元投稿取得・監視・検索・学習)はコスト削減のため twitterapi.io を優先し、`TwitterApiIoError` 等の失敗時のみ公式 X へフォールバックする。読み取りは資格情報を使わないため BAN とは無関係。**キーは複数登録でき、優先度順(小さいほど先)に試して残高切れ(402)・タイムアウト時は次のキーへ自動フォールバック、全キー失敗で初めて公式 X へ**(`MultiTwitterApiIoClient` / `TwitterApiKey` テーブル)。キーは UI(Settings)で追加/編集/並べ替え/有効無効/疎通テスト/削除できる。`TWITTERAPI_IO_KEY`(.env)は `init_db` で DB が空のとき1件だけ取り込み、以後は DB が正(DBにキーが1件でもあれば .env は参照されない)。DB にも .env にもキーが無ければ読み取りも全て公式 X(オプトイン方式)。
 - **デーモンは承認済み予約のみ投稿する**。常駐スケジューラの `SCHEDULED` 経路は「`status==QUEUED` かつ `scheduled_at` が設定済み かつ 到来済み」の3条件をすべて満たす下書きだけを投稿する(誤爆防止の要、`ensure_post_authorized`)。
 - **ブラックアウト(制限時間帯)**。平日の指定帯(JST、既定 月〜金の 09:00–12:00 / 13:00–19:00)は自分の公開書き込みを一切ブロックする。監視(読み取り)はブロックしない。二段階確認を通した `override` または予約時に保存した `Draft.blackout_override` でのみ突破できる(§10)。
 - **頻度ガード**。1日上限(自然な範囲、既定10件)・ハード上限(既定100件)・連投の最小間隔(既定300秒)を `RateLimiter` が決定論的に判定する(§6)。
@@ -84,7 +84,8 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `xagent/news.py` | ニュース速報の下書き生成(XNewsBotのDBを読み取り専用で参照) |
 | `xagent/daemon.py` | 常駐ティック関数(`monitor_tick` / `news_tick` / `queue_tick`)と `run` |
 | `xagent/x_client.py` | `XClient`(公式 X API ラッパ、書込/読取の窓口) |
-| `xagent/twitterapi_client.py` | `TwitterApiIoClient`(twitterapi.io 読取専用バックエンド) |
+| `xagent/twitterapi_client.py` | `TwitterApiIoClient`(twitterapi.io 読取専用バックエンド) + `MultiTwitterApiIoClient`(複数キーを優先度順に試すフォールバック・チェーン) |
+| `xagent/twitterapi_keys.py` | twitterapi.io 読取キーの CRUD・並べ替え・疎通テスト・マスク表示 |
 | `xagent/cli.py` | Typer CLI |
 | `xagent/mcp_server.py` | FastMCP サーバ(Claude Code 連携) |
 | `xagent/api/` | FastAPI ルータ群 + 共通基盤(`deps.py` / `schemas.py`) |
@@ -260,13 +261,26 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `note` | `str?` | `None` | メモ |
 | `ts` | `datetime` | `_utcnow` | 記録時刻 |
 
+#### `TwitterApiKey`(`twitterapikey`)— twitterapi.io 読取キー【複数行・優先度順フォールバック】
+
+他人投稿の読み取りに使う twitterapi.io キーを複数保持し、`priority` 昇順に試して失敗時は次のキーへ。秘密情報のためローカルDBにのみ保存し、一覧APIでは末尾4文字だけマスク表示する(`mask_key`)。`.env` の `TWITTERAPI_IO_KEY` は `init_db` の `_seed_twitterapi_keys` で DB が空のとき1件だけ取り込む(冪等)。
+
+| フィールド | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `label` | `str` | `""` | UI表示用の名前(例: メイン/予備1) |
+| `api_key` | `str` | (必須) | twitterapi.io の X-API-Key(秘密。APIではマスクして返す) |
+| `priority` | `int` | `100` | 小さいほど優先。同値は id 昇順。並べ替えで 0,1,2... に振り直す |
+| `enabled` | `bool` | `True` | OFF はフォールバック対象から外す |
+| `last_ok_at` | `datetime?` | `None` | 最後に疎通成功した時刻(UIの「テスト」で更新) |
+| `last_error` | `str?` | `None` | 最後の疎通失敗の内容(UIの「テスト」で更新。キー差し替え時はクリア) |
+
 ### 単一行(シングルトン)テーブルの運用
 
 `StyleProfile`(name=default)/`MonitorSettings`(id=1)/`BlackoutSettings`(id=1)/`NewsSettings` はいずれも「単一行運用」だが、DB 制約ではなく利用側コードが保証する。`get_monitor_settings` / `get_blackout_settings` / `get_news_settings` は先頭行を返し、無ければ既定値で作成・commit する(`StyleProfile` は `set_style_guide` が name=default で upsert)。
 
 ### マイグレーション(`db._migrate` / `_ADDED_COLUMNS`)
 
-`init_db()` は ① `get_engine()` → ② `SQLModel.metadata.create_all`(未作成テーブルを作る。**ALTER はしない**)→ ③ `_migrate()`(冪等列追加)→ ④ `seed_builtin_templates`(型の冪等投入)の順で実行する。
+`init_db()` は ① `get_engine()` → ② `SQLModel.metadata.create_all`(未作成テーブルを作る。**ALTER はしない**)→ ③ `_migrate()`(冪等列追加)→ ④ `seed_builtin_templates`(型の冪等投入)→ ⑤ `_seed_twitterapi_keys`(DBが空かつ `.env` に `TWITTERAPI_IO_KEY` があれば1件取り込み・冪等)の順で実行する。
 
 `create_all` が既存テーブルに列追加しない欠点を補うのが `_migrate()`。`_ADDED_COLUMNS` は `{テーブル名: [(列名, SQLite型, デフォルト句), ...]}` で、`PRAGMA table_info` で既存列を調べ、無い列だけ `ALTER TABLE ... ADD COLUMN` する(前方追加専用。型変更・列削除・データ移行はしない)。
 
@@ -566,6 +580,19 @@ lists ルータの GET/POST/PATCH/DELETE/members 系はすべて `except XClient
 
 メディア配信は本ルータではなく `main.py` の `app.mount("/media/files", StaticFiles(directory=media_dir()))`。
 
+### twitterapi-keys(`/twitterapi-keys`)
+
+twitterapi.io 読取キーの管理。秘密キーは平文で返さず末尾4文字にマスク(`key_masked`)。全エンドポイント `require_api_token`。
+
+| メソッド | パス | 用途 | エラー |
+|---|---|---|---|
+| GET | `/twitterapi-keys` | キー一覧(priority 昇順・マスク表示) | — |
+| POST | `/twitterapi-keys` | キー追加(`{api_key, label?, enabled?}`。priority 未指定で末尾追加) | 400(空キー) |
+| PATCH | `/twitterapi-keys/{id}` | 更新(`label`/`api_key`(差し替え時のみ・past疎通結果クリア)/`priority`/`enabled`、None は据え置き) | 404 |
+| DELETE | `/twitterapi-keys/{id}` | 削除(204) | 404 |
+| POST | `/twitterapi-keys/reorder` | `{ids:[...]}` の順に priority を 0,1,2... へ振り直す(↑↓並べ替え) | — |
+| POST | `/twitterapi-keys/{id}/test` | キー1本で twitterapi.io に1回読取を投げ、成否を `last_ok_at`/`last_error` に記録 | 404 |
+
 ### HTTPエラーコードの意味(横断)
 
 | コード | 意味 | 主な発生箇所 |
@@ -613,7 +640,7 @@ Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯�
 | **Templates** | 投稿/リプの「型」管理 | 種別ごと一覧、作成/編集/既定化(`activate`、1kind1つ)/削除。内蔵型も編集・削除可能 |
 | **Style** | 文体管理 | スタイルガイド(常時適用)保存、自分の過去投稿学習(`learn`)、アカウント学習(`learnProfile`、50/100/200件・is_self)、学習済みプロファイル一覧 |
 | **Analytics** | コスト・集計の閲覧専用 | `cost`(X API/Claude API 2カラム+内訳)、`summary`(ステータス別件数)。操作要素なし |
-| **Settings** | 監視・制限帯 | 監視ソーストグル(楽観的更新)、`max_drafts_per_run`、`min_impressions`(絡み候補の最低インプレッション・onBlur保存)、`auto_monitor_enabled`(絡み案の自動生成オンオフ・既定OFF)、**有名人ウォッチカード**(`celeb_watch_enabled` トグル・既定OFF、`celeb_list_id` の設定状況表示、「今すぐチェック」=`celebRunOnceStart`→`pollJob` 進捗表示でエラー/候補0/生成N件をトースト分岐)、**バズウォッチカード**(`buzz_watch_enabled` トグル・既定OFF、`buzz_min_faves` 入力・onBlur保存、「今すぐチェック」=`buzzRunOnceStart`→`pollJob` 同様のトースト分岐)、ブラックアウト編集(保存ボタンを押すまで反映されない) |
+| **Settings** | 監視・制限帯 | 監視ソーストグル(楽観的更新)、`max_drafts_per_run`、`min_impressions`(絡み候補の最低インプレッション・onBlur保存)、`auto_monitor_enabled`(絡み案の自動生成オンオフ・既定OFF)、**有名人ウォッチカード**(`celeb_watch_enabled` トグル・既定OFF、`celeb_list_id` の設定状況表示、「今すぐチェック」=`celebRunOnceStart`→`pollJob` 進捗表示でエラー/候補0/生成N件をトースト分岐)、**バズウォッチカード**(`buzz_watch_enabled` トグル・既定OFF、`buzz_min_faves` 入力・onBlur保存、「今すぐチェック」=`buzzRunOnceStart`→`pollJob` 同様のトースト分岐)、**twitterapi.io キー管理カード**(`TwitterApiKeys` コンポーネント。複数キーの追加/編集/↑↓並べ替え=`reorderTwitterApiKeys`/有効無効トグル/疎通テスト=`testTwitterApiKey`(成否を疎通ステータス表示)/削除(ConfirmDialog 確認)。キーは末尾4文字マスク表示、追加・差し替えは type=password で平文送信)、ブラックアウト編集(保存ボタンを押すまで反映されない) |
 | **Agent** | 静的な説明画面 | Claude Code への話しかけ方(言う言葉→やること→等価CLI)を3カテゴリで表示。API 呼び出しなし |
 
 ### 主要共通コンポーネント
@@ -884,6 +911,7 @@ SQLite `xagent.db`(`DB_PATH` 既定)。容量上限 `MAX_DB_BYTES`(既定2GB)超
 
 ### XClient のフォールバック特例
 
+- 読取バックエンドは `from_settings` の `_build_read_backend` が組み立てる: DBの有効な `TwitterApiKey` を優先度順に並べた `MultiTwitterApiIoClient`(複数キーを順に試し、各キーが `TwitterApiIoError` なら次へ、全キー失敗で送出)。DBにキーが無ければ `.env` の単一キー、それも無ければ `None`(公式APIのみ)。DB読込失敗は致命にせず `.env` に倒す(テストのインメモリDB/初期化前でも投稿系が動くように try/except)。`MultiTwitterApiIoClient` は単一キーと同じ読取メソッドを公開するため `XClient._read` 側は単複を区別しない(「全キー失敗」が従来の `TwitterApiIoError` と同じ意味になり、その時だけ公式へフォールバック)。
 - 読取は基本「`TwitterApiIoError` のときだけ公式フォールバック」だが、`get_list_members` だけは**「空配列(falsy)でも公式へフォールバック」**する(非公開リストは twitterapi.io が空を返すため)。
 - `retweet` だけが書込系で唯一 `_guard` を通さず、tweepy 例外が `XClientError` に変換されずそのまま伝播する(意図的か否か**未確認**)。
 - `get_owned_lists` / `get_list_members` の公式呼び出しは `user_auth=True` 必須(Bearer/app-only だと X が 503 を返す)。
@@ -913,7 +941,7 @@ SQLite `xagent.db`(`DB_PATH` 既定)。容量上限 `MAX_DB_BYTES`(既定2GB)超
 | `X_API_KEY` / `X_API_SECRET` | None | X API OAuth1.0a(書込用) |
 | `X_ACCESS_TOKEN` / `X_ACCESS_TOKEN_SECRET` | None | OAuth1.0a アクセストークン(メディアアップロード用 v1.1 にも必須) |
 | `X_BEARER_TOKEN` | None | X API Bearer(読取用) |
-| `TWITTERAPI_IO_KEY` | None | twitterapi.io キー(読取専用)。未設定なら読取も公式X(オプトイン) |
+| `TWITTERAPI_IO_KEY` | None | twitterapi.io キー(読取専用)。`init_db` で DB が空のとき `TwitterApiKey` に1件取り込まれ、以後は **DB(Settings UI)が正**(複数キー・優先度順フォールバック)。DBにキーがあれば本envは参照されない。DB・env とも無ければ読取も公式X(オプトイン) |
 | `DB_PATH` | `xagent.db` | SQLite ファイルパス |
 | `MAX_DB_BYTES` | 2GB(`2147483648`) | DB容量上限。超過で古い端末状態を物理削除 |
 | `MEDIA_DIR` | `media` | 画像/動画保存先 |

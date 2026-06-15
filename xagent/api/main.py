@@ -38,6 +38,7 @@ from .routes import (
     style,
     targets,
     templates,
+    twitterapi_keys,
 )
 
 log = logging.getLogger("xagent.api")
@@ -204,6 +205,7 @@ app.include_router(analytics.router)
 app.include_router(lists.router)
 app.include_router(templates.router)
 app.include_router(news.router)
+app.include_router(twitterapi_keys.router)
 app.include_router(jobs_router)
 
 # 添付画像/動画のプレビュー配信(ローカル)。アップロードAPIは /media/upload、配信は /media/files。

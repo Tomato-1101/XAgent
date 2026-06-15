@@ -262,3 +262,24 @@ class ApiCostLog(SQLModel, table=True):
     cost_usd: float = 0.0
     note: str | None = None
     ts: datetime = Field(default_factory=_utcnow)
+
+
+class TwitterApiKey(SQLModel, table=True):
+    """twitterapi.io(読み取り用)のAPIキー。複数登録し優先度順にフォールバックする。
+
+    他人投稿の読み取りで priority 昇順(小さいほど先)に各キーを試し、失敗(残高切れ402・
+    タイムアウト等)なら次のキーへ。全キー失敗で初めて公式APIへフォールバックする
+    (x_client._read)。キーは秘密情報のため一覧APIではマスク表示し、ローカルSQLite
+    (非公開・API_TOKEN認証下)にのみ保存する。.env の TWITTERAPI_IO_KEY は init_db で
+    DBが空のとき1件だけ取り込む(以後はDBが正)。
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    label: str = ""               # UI表示用の名前(例: メイン/予備1)。空でも可
+    api_key: str                  # twitterapi.io の X-API-Key(秘密)
+    priority: int = 100           # 小さいほど優先。同値は id 昇順
+    enabled: bool = True          # OFFのキーはフォールバック対象から外す
+    last_ok_at: datetime | None = None  # 最後に疎通成功した時刻(UIの「テスト」で更新)
+    last_error: str | None = None       # 最後の疎通失敗の内容(UIの「テスト」で更新)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)

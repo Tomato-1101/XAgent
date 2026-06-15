@@ -20,6 +20,7 @@ import type {
   SummaryResponse,
   Target,
   TemplateKind,
+  TwitterApiKey,
   XList,
   XListMember,
 } from "./types";
@@ -399,4 +400,24 @@ export const api = {
   activateTemplate: (id: number) =>
     req<PromptTemplate>(`/templates/${id}/activate`, { method: "POST" }),
   deleteTemplate: (id: number) => req<void>(`/templates/${id}`, { method: "DELETE" }),
+
+  // twitterapi.io 読み取りキー(複数・優先度順フォールバック)。平文キーは保存時のみ送る。
+  twitterApiKeys: () => req<TwitterApiKey[]>("/twitterapi-keys"),
+  createTwitterApiKey: (payload: { api_key: string; label?: string; enabled?: boolean }) =>
+    req<TwitterApiKey>("/twitterapi-keys", { method: "POST", body: JSON.stringify(payload) }),
+  updateTwitterApiKey: (
+    id: number,
+    patch: { label?: string; api_key?: string; priority?: number; enabled?: boolean }
+  ) => req<TwitterApiKey>(`/twitterapi-keys/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteTwitterApiKey: (id: number) =>
+    req<void>(`/twitterapi-keys/${id}`, { method: "DELETE" }),
+  // この id 順に優先度を 0,1,2... へ振り直す(↑↓の並べ替え)。
+  reorderTwitterApiKeys: (ids: number[]) =>
+    req<TwitterApiKey[]>("/twitterapi-keys/reorder", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+  // キー1本で疎通を1回確認し、結果(last_ok_at/last_error)を記録して返す。
+  testTwitterApiKey: (id: number) =>
+    req<TwitterApiKey>(`/twitterapi-keys/${id}/test`, { method: "POST" }),
 };

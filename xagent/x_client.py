@@ -12,7 +12,11 @@ import logging
 from typing import Any, Protocol
 
 from .config import Settings, get_settings
-from .twitterapi_client import TwitterApiIoClient, TwitterApiIoError
+from .twitterapi_client import (
+    MultiTwitterApiIoClient,
+    TwitterApiIoClient,
+    TwitterApiIoError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,12 +101,38 @@ class XClient:
             )
             api_v1 = tweepy.API(auth)
         # 読み取り用の安価なバックエンド(設定時のみ)。投稿系は常に公式 client を使う。
-        read_backend = (
-            TwitterApiIoClient(settings.twitterapi_io_key)
-            if settings.twitterapi_io_key
-            else None
-        )
+        read_backend = cls._build_read_backend(settings)
         return cls(client, api_v1, read_backend=read_backend)
+
+    @staticmethod
+    def _build_read_backend(settings: Settings):
+        """twitterapi.io 読み取りバックエンドを組み立てる。
+
+        DBの有効キーを優先度順に並べたフォールバック・チェーンを返す。DBにキーが無ければ
+        .env の単一キー、それも無ければ None(=公式APIのみ)。DB読込失敗は致命にせず .env に倒す
+        (テストのインメモリDBや初期化前でも投稿系が動くように)。
+        """
+        try:
+            from sqlmodel import select
+
+            from .db import get_session
+            from .models import TwitterApiKey
+
+            with get_session() as session:
+                rows = session.exec(
+                    select(TwitterApiKey)
+                    .where(TwitterApiKey.enabled == True)  # noqa: E712
+                    .order_by(TwitterApiKey.priority, TwitterApiKey.id)
+                ).all()
+            clients = [TwitterApiIoClient(r.api_key) for r in rows if r.api_key]
+        except Exception as e:  # DB未初期化/別engine等。読取バックエンドは任意機能なので倒さない
+            logger.warning("twitterapi.io キーのDB読込に失敗→.envにフォールバック: %s", e)
+            clients = []
+        if clients:
+            return MultiTwitterApiIoClient(clients)
+        if settings.twitterapi_io_key:
+            return TwitterApiIoClient(settings.twitterapi_io_key)
+        return None
 
     # --- 読み取りルーティング(バックエンド優先 / 失敗時のみ公式へ) ---
     def _read(self, backend_call, official_call, what: str, official_fallback: bool = True):

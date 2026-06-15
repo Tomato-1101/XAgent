@@ -273,3 +273,52 @@ class ListUpdateRequest(BaseModel):
 class ListMemberAddRequest(BaseModel):
     handle: str | None = None
     user_id: str | None = None
+
+
+# --- twitterapi.io 読み取りキー(複数・優先度順フォールバック) ---
+class TwitterApiKeyRead(BaseModel):
+    """一覧/詳細の戻り。秘密キーは平文を返さずマスク(末尾4文字)だけ返す。"""
+
+    id: int | None
+    label: str = ""
+    key_masked: str = ""          # 例: ••••••3f9c(平文は返さない)
+    priority: int = 0
+    enabled: bool = True
+    last_ok_at: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TwitterApiKeyCreate(BaseModel):
+    api_key: str                  # twitterapi.io の X-API-Key(平文・保存時のみ受ける)
+    label: str = ""
+    enabled: bool = True
+    priority: int | None = None   # 未指定なら末尾に追加
+
+
+class TwitterApiKeyUpdate(BaseModel):
+    label: str | None = None
+    api_key: str | None = None    # 空/未指定なら据え置き(差し替え時のみ平文を送る)
+    priority: int | None = None
+    enabled: bool | None = None
+
+
+class TwitterApiKeyReorder(BaseModel):
+    ids: list[int]                # この並び順で priority を 0,1,2... に振り直す
+
+
+def twitterapi_key_to_read(row) -> TwitterApiKeyRead:
+    from ..twitterapi_keys import mask_key
+
+    return TwitterApiKeyRead(
+        id=row.id,
+        label=row.label,
+        key_masked=mask_key(row.api_key),
+        priority=row.priority,
+        enabled=row.enabled,
+        last_ok_at=row.last_ok_at,
+        last_error=row.last_error,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )

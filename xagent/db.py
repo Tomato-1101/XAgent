@@ -76,6 +76,24 @@ def _migrate(engine) -> None:
                     )
 
 
+def _seed_twitterapi_keys(session) -> None:
+    """DBに twitterapi.io キーが1件も無く .env に鍵があれば初回だけ取り込む(冪等)。
+
+    以後はDBが唯一の正となり、UIで追加/編集/並べ替え/削除できる。.env の鍵は残っていても
+    DBにキーが1件でもあれば参照されない(x_client._build_read_backend)。
+    """
+    from sqlmodel import select
+
+    from .models import TwitterApiKey
+
+    if session.exec(select(TwitterApiKey)).first() is not None:
+        return
+    key = get_settings().twitterapi_io_key
+    if key:
+        session.add(TwitterApiKey(label=".envから取込", api_key=key, priority=0))
+        session.commit()
+
+
 def init_db() -> None:
     """テーブルを作成(なければ)し、列追加マイグレーションと初期シードを適用する。"""
     engine = get_engine()
@@ -86,6 +104,7 @@ def init_db() -> None:
 
     with Session(engine) as session:
         seed_builtin_templates(session)
+        _seed_twitterapi_keys(session)
 
 
 @contextmanager

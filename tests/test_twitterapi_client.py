@@ -219,3 +219,55 @@ def test_get_raises_after_second_timeout(monkeypatch):
     c = _client_with(monkeypatch, handler)
     with pytest.raises(TwitterApiIoError):
         c.get_tweet("1")
+
+
+# --- 複数キーのフォールバック・チェーン(MultiTwitterApiIoClient) ---
+from xagent.twitterapi_client import MultiTwitterApiIoClient  # noqa: E402
+
+
+class _StubClient:
+    """指定回数だけ TwitterApiIoError を投げ、以降は成功する読み取りクライアントのスタブ。"""
+
+    def __init__(self, fail: bool, marker: str):
+        self.fail = fail
+        self.marker = marker
+        self.calls = 0
+
+    def get_tweet(self, tweet_id):
+        self.calls += 1
+        if self.fail:
+            raise TwitterApiIoError(f"{self.marker} down")
+        return {"id": tweet_id, "by": self.marker}
+
+    def get_user_by_username(self, username):
+        self.calls += 1
+        if self.fail:
+            raise TwitterApiIoError(f"{self.marker} down")
+        return {"id": "1", "username": username}
+
+
+def test_multi_uses_first_success_and_skips_failed():
+    bad = _StubClient(fail=True, marker="k1")
+    good = _StubClient(fail=False, marker="k2")
+    third = _StubClient(fail=False, marker="k3")
+    m = MultiTwitterApiIoClient([bad, good, third])
+    assert m.get_tweet("123") == {"id": "123", "by": "k2"}  # 1本目失敗→2本目成功
+    assert bad.calls == 1 and good.calls == 1
+    assert third.calls == 0  # 2本目で成功したので3本目は呼ばれない
+
+
+def test_multi_raises_when_all_fail():
+    m = MultiTwitterApiIoClient([_StubClient(True, "k1"), _StubClient(True, "k2")])
+    with pytest.raises(TwitterApiIoError):
+        m.get_tweet("1")  # 全キー失敗 → 送出(XClientが公式へフォールバックする)
+
+
+def test_multi_proxies_all_backend_methods():
+    m = MultiTwitterApiIoClient([_StubClient(False, "k1")])
+    for name in tac._BACKEND_METHODS:
+        assert callable(getattr(m, name))
+
+
+def test_multi_requires_at_least_one_client():
+    with pytest.raises(ValueError):
+        MultiTwitterApiIoClient([])
