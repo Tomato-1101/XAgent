@@ -287,6 +287,9 @@ export const api = {
       { method: "POST", body: JSON.stringify({ to }) },
       onProgress,
     ),
+  // 絡みの下書きの本文を、同じ型のままウェブ検索つきでAIに作り直させる(リプ案の再生成)。ジョブ経由。
+  regenerateDraft: (id: number, onProgress?: JobProgress) =>
+    runJob<Draft>(`/drafts/${id}/regenerate`, { method: "POST" }, onProgress),
 
   getStyle: () => req<{ guide_text: string; examples: string[] }>("/style"),
   putStyle: (guide_text: string) =>

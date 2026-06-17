@@ -138,6 +138,33 @@ def recast(
     return {"job_id": start_job(_run, label="recast")}
 
 
+@router.post("/{draft_id}/regenerate")
+def regenerate(
+    draft_id: int,
+    session: Session = Depends(db_session),
+    formatter: Formatter = Depends(get_formatter),
+    session_factory: Callable[[], Session] = Depends(get_session_factory),
+) -> dict:
+    """絡みの下書きの本文を、同じ型のままウェブ検索つきでAIに作り直させる(リプ案の再生成)。
+
+    型は変えない(型切替は /recast)。Inboxの[リプ案を再生成]から呼ばれる。未承認の
+    REPLY/QUOTE のみ可。本文のAIリサーチ生成に数十秒〜数分かかるため job_id を即返し、
+    フロントが /jobs/{id} をポーリングする。
+    """
+    _load(session, draft_id)  # 404 だけは即返す
+
+    def _run(set_progress: Callable[[str], None]) -> dict:
+        set_progress("AIがリサーチして本文を再生成中(数十秒〜数分)")
+        with session_factory() as s:
+            d = service.get_draft(s, draft_id)
+            if d is None:
+                raise PolicyViolation("下書きが見つかりません。")
+            service.regenerate_engage_draft(s, formatter, d)
+            return draft_to_read(d).model_dump(mode="json")
+
+    return {"job_id": start_job(_run, label="regenerate")}
+
+
 @router.post("/{draft_id}/queue", response_model=DraftRead)
 def queue(
     draft_id: int, req: QueueRequest, session: Session = Depends(db_session)

@@ -57,6 +57,8 @@ export default function Inbox({ me }: { me: Me | null }) {
   const [quoteProgress, setQuoteProgress] = useState<string | null>(null); // 引用案生成の進捗
   const [pending, setPending] = useState<Draft | null>(null);
   const [recastingId, setRecastingId] = useState<number | null>(null); // 型切替中の案id
+  const [regeneratingId, setRegeneratingId] = useState<number | null>(null); // 再生成中の案id
+  const [actionProgress, setActionProgress] = useState<string | null>(null); // 型切替/再生成の進捗
   const toast = useToast();
   const { gate, element: blackoutGate } = useBlackoutGate();
 
@@ -84,7 +86,7 @@ export default function Inbox({ me }: { me: Me | null }) {
       }>(jobId, (msg, sec) => {
         setRunProgress(progressLabel(msg, sec));
         // 下書きは選定後1件ずつDBに入るので、作成が始まったら一覧へ即反映する
-        if (msg.startsWith("下書き作成中")) reload();
+        if (msg.includes("本文作成中") || msg.startsWith("下書き作成中")) reload();
       });
       setInfo(
         r.candidates === 0
@@ -166,8 +168,9 @@ export default function Inbox({ me }: { me: Me | null }) {
   async function recast(d: Draft, to: "reply" | "quote") {
     setRecastingId(d.id);
     setError(null);
+    setActionProgress(progressLabel("開始しています…", 0));
     try {
-      await api.recast(d.id, to);
+      await api.recast(d.id, to, (msg, sec) => setActionProgress(progressLabel(msg, sec)));
       toast({
         tone: "success",
         message: to === "quote" ? "引用RT案に切り替えました。" : "リプライ案に切り替えました。",
@@ -178,6 +181,25 @@ export default function Inbox({ me }: { me: Me | null }) {
       toast({ tone: "error", message: `切替に失敗しました: ${String(e)}` });
     } finally {
       setRecastingId(null);
+      setActionProgress(null);
+    }
+  }
+
+  // 同じ型のまま本文だけウェブ検索つきでAIに作り直させる(型は変えない。型切替は recast)。
+  async function regenerate(d: Draft) {
+    setRegeneratingId(d.id);
+    setError(null);
+    setActionProgress(progressLabel("開始しています…", 0));
+    try {
+      await api.regenerateDraft(d.id, (msg, sec) => setActionProgress(progressLabel(msg, sec)));
+      toast({ tone: "success", message: "リプ案を再生成しました。" });
+      reload();
+    } catch (e) {
+      setError(String(e));
+      toast({ tone: "error", message: `再生成に失敗しました: ${String(e)}` });
+    } finally {
+      setRegeneratingId(null);
+      setActionProgress(null);
     }
   }
 
@@ -256,7 +278,15 @@ export default function Inbox({ me }: { me: Me | null }) {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={recastingId === d.id}
+                disabled={recastingId === d.id || regeneratingId === d.id}
+                onClick={() => regenerate(d)}
+              >
+                {regeneratingId === d.id ? <Spinner /> : "リプ案を再生成"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={recastingId === d.id || regeneratingId === d.id}
                 onClick={() => recast(d, "quote")}
               >
                 {recastingId === d.id ? <Spinner /> : "引用RTで送る"}
@@ -264,6 +294,11 @@ export default function Inbox({ me }: { me: Me | null }) {
               <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
                 却下
               </Button>
+              {(recastingId === d.id || regeneratingId === d.id) && actionProgress && (
+                <span className="flex w-full items-center gap-1 text-xs text-amber-300/90">
+                  <Spinner /> {actionProgress}
+                </span>
+              )}
             </>
           ) : (
             <>
@@ -288,7 +323,15 @@ export default function Inbox({ me }: { me: Me | null }) {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={recastingId === d.id}
+                disabled={recastingId === d.id || regeneratingId === d.id}
+                onClick={() => regenerate(d)}
+              >
+                {regeneratingId === d.id ? <Spinner /> : "引用案を再生成"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={recastingId === d.id || regeneratingId === d.id}
                 onClick={() => recast(d, "reply")}
               >
                 {recastingId === d.id ? <Spinner /> : "手動で返信に切替"}
@@ -296,6 +339,11 @@ export default function Inbox({ me }: { me: Me | null }) {
               <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
                 却下
               </Button>
+              {(recastingId === d.id || regeneratingId === d.id) && actionProgress && (
+                <span className="flex w-full items-center gap-1 text-xs text-amber-300/90">
+                  <Spinner /> {actionProgress}
+                </span>
+              )}
             </>
           )
         }

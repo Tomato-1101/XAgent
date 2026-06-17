@@ -217,7 +217,7 @@ def test_run_once_reports_progress(session, fake_formatter):
     assert any("メンション" in n for n in notes)
     assert any("候補収集中" in n and "@famous" in n for n in notes)
     assert any("AIバッチ選定中" in n and "候補1件" in n for n in notes)
-    assert any("下書き作成中" in n for n in notes)
+    assert any("本文作成中" in n for n in notes)
 
 
 def test_mentions_can_be_disabled(session, fake_formatter):

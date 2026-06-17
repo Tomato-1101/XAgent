@@ -22,19 +22,36 @@ from .text import FOLD_THRESHOLD_WEIGHTED, exceeds_fold, split_into_thread, weig
 
 # 返信が毎回同じ長さに寄らないよう、生成ごとに目安の長さ帯をランダムに選ぶ。
 # (lo, hi, 表現) — 内容を優先しつつ、この幅を狙う。上限の140字は別途厳守。
+# reply は「短く簡単に」が伸びるので短い帯に寄せる。quote は自分の視点/一次情報を
+# 一段添えるぶん少し長めの帯を許す。
 _REPLY_LENGTH_BANDS = [
-    (15, 40, "ごく短い一言で言い切る"),
-    (40, 80, "中くらいの長さで一言添える"),
-    (80, 130, "しっかり具体を添えて書く"),
+    (6, 18, "ひと言で短く言い切る"),
+    (12, 30, "短めに一言だけ添える"),
+    (22, 45, "もう一言だけ具体を足す"),
+]
+_QUOTE_LENGTH_BANDS = [
+    (20, 50, "短めに自分の一言を添える"),
+    (40, 80, "中くらいの長さで視点を添える"),
+    (70, 120, "一次情報や具体を添えてしっかり書く"),
 ]
 
 
-def _reply_length_hint() -> str:
-    lo, hi, how = random.choice(_REPLY_LENGTH_BANDS)
+def _length_hint(kind: str = "reply") -> str:
+    bands = _QUOTE_LENGTH_BANDS if kind == "quote" else _REPLY_LENGTH_BANDS
+    lo, hi, how = random.choice(bands)
     return (
         f"今回は{how}（目安 {lo}〜{hi} 字）。毎回同じ長さにせず幅を持たせる。"
         "ただし内容を最優先し、字数合わせのために不自然に伸ばしたり削ったりしない。"
     )
+
+
+def _tweet_url(handle: str, tweet_id: str) -> str:
+    """元投稿のURL(リサーチでモデルが文脈を辿る材料)。handle不明なら i/web 形式。"""
+    tid = (tweet_id or "").strip()
+    if not tid:
+        return ""
+    h = (handle or "").strip().lstrip("@")
+    return f"https://x.com/{h}/status/{tid}" if h else f"https://x.com/i/web/status/{tid}"
 
 
 # モデルが稀に本文末尾へ付ける自己解説トレーラー(例: "\n---\n**96字**／型：…で返しています。")を落とす。
@@ -90,10 +107,22 @@ def _guide_with_playbook(playbook: str, style_guide: str, examples: list[str] | 
 
 class Formatter:
     def __init__(
-        self, settings: Settings | None = None, complete: CompleteFn | None = None
+        self,
+        settings: Settings | None = None,
+        complete: CompleteFn | None = None,
+        research_complete: CompleteFn | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self._complete = complete or self._claude_cli_complete
+        # リプ/引用の本文はウェブ検索で元投稿の文脈を調べてから書く(research_complete)。
+        # 明示注入が無く complete だけ注入された場合(テスト)は complete を流用し、
+        # 本番(どちらも未注入)では WebSearch/WebFetch 付きの使い捨てセッションを使う。
+        if research_complete is not None:
+            self._research_complete = research_complete
+        elif complete is not None:
+            self._research_complete = complete
+        else:
+            self._research_complete = self._claude_cli_research
         # この整形器インスタンスで消費した Claude トークン(コスト記録用に蓄積)
         self.usage_input = 0
         self.usage_output = 0
@@ -104,6 +133,17 @@ class Formatter:
 
     def _claude_cli_complete(self, system: str, user: str) -> str:
         res = run_claude(system, user, self.settings)
+        self.usage_input += res.input_tokens
+        self.usage_output += res.output_tokens
+        return res.text
+
+    def _claude_cli_research(self, system: str, user: str) -> str:
+        """WebSearch/WebFetch を許可した使い捨てセッションで本文を生成する(リサーチ付き)。"""
+        res = run_claude(
+            system, user, self.settings,
+            allowed_tools=["WebSearch", "WebFetch"],
+            timeout=self.settings.claude_cli_research_timeout_seconds,
+        )
         self.usage_input += res.input_tokens
         self.usage_output += res.output_tokens
         return res.text
@@ -221,19 +261,26 @@ class Formatter:
         style_guide: str = "",
         examples: list[str] | None = None,
         playbook: str = "",
+        target_tweet_id: str = "",
     ) -> FormatResult:
         system = f"""あなたは日本語Xアカウントの運用アシスタント。相手の投稿への自然なリプライ案を1つ作る。
 
+まず相手の投稿の話題・固有名詞・最新の文脈を WebSearch(必要なら投稿URLを WebFetch)で軽く調べ、
+誤解や的外れを避け、自分なりの考えを一度持つ。ただし調べた知識は本文にひけらかさない。
+
 ルール:
-- 必ず140字(日本語の字数)以内。1字も超えない。
-- 具体や知識は無理に足さない。素の共感・面白がり・一言ツッコミでよい(「あ、そうですよね」「これ面白い」「わかる」級)。短く本音っぽいほど伸びる。
-- {_reply_length_hint()}
-- 媚びすぎ・定型の褒めは避ける。が、賢く見せようと説明的・解説的になるのはもっと避ける。本人の口調を保つ。
+- 必ず140字(日本語の字数)以内。1字も超えない。短く簡単なほど伸びる(これが最優先)。
+- 素の共感・面白がり・一言ツッコミでよい(「あ、そうですよね」「これ面白い」「わかる」級)。調べた内容は的外れ回避にだけ使い、解説・説明はしない。
+- {_length_hint("reply")}
+- 媚びすぎ・定型の褒めは避ける。賢く見せようと説明的・解説的になるのはもっと避ける。本人の口調を保つ。リプ欄で伸びる(共感/あるある/軽いツッコミ)バズの形を意識する。
 - 出力はリプライ本文のみ。字数・型・狙いなどの自己解説や「---」区切りの注記を一切付けない。
 
 {_guide_with_playbook(playbook, style_guide, examples)}""".strip()
+        url = _tweet_url(target_handle, target_tweet_id)
         user = f"相手(@{target_handle})の投稿:\n{target_text}"
-        text = _strip_reasoning_trailer(self._complete(system, user).strip())
+        if url:
+            user += f"\n投稿URL: {url}"
+        text = _strip_reasoning_trailer(self._research_complete(system, user).strip())
         return FormatResult([text], exceeds_fold(text), weighted_length(text))
 
     # --- 引用RT案 ---
@@ -244,18 +291,25 @@ class Formatter:
         style_guide: str = "",
         examples: list[str] | None = None,
         playbook: str = "",
+        target_tweet_id: str = "",
     ) -> FormatResult:
         system = f"""あなたは日本語Xアカウントの運用アシスタント。相手の投稿を引用RTする際の本文案を1つ作る。
 
+まず相手の投稿の話題・固有名詞・最新の文脈を WebSearch(必要なら投稿URLを WebFetch)で調べ、
+事実を取り違えないようにした上で、自分の視点や一次情報を一段だけ添える。
+
 ルール:
 - 必ず140字(日本語の字数)以内。1字も超えない。
-- 学びは必須でない。素直な反応＋自分の一言でよい(「これ面白い」「わかる」級)。賢く解説しようとして説明的になるより本音の短さが伸びる。
-- {_reply_length_hint()}
-- 本人の口調を保つ。出力は引用本文のみ。字数・型・狙いなどの自己解説や「---」区切りの注記を一切付けない。
+- 賢く解説しようとして説明的になるより、素直な反応＋自分の一言の短さが伸びる。調べた事実は裏取りに使い、引用は最小限に。
+- {_length_hint("quote")}
+- 本人の口調を保つ。拡散されやすい(視点が一つ立っている)バズの形を意識する。出力は引用本文のみ。字数・型・狙いなどの自己解説や「---」区切りの注記を一切付けない。
 
 {_guide_with_playbook(playbook, style_guide, examples)}""".strip()
+        url = _tweet_url(target_handle, target_tweet_id)
         user = f"引用する相手(@{target_handle})の投稿:\n{target_text}"
-        text = _strip_reasoning_trailer(self._complete(system, user).strip())
+        if url:
+            user += f"\n投稿URL: {url}"
+        text = _strip_reasoning_trailer(self._research_complete(system, user).strip())
         return FormatResult([text], exceeds_fold(text), weighted_length(text))
 
     # --- 絡み候補のバッチ選定(分散・reply/quote判断・本文生成まで1回で行う) ---
@@ -323,11 +377,11 @@ reply / quote の判断基準:
 - reply: 相手のスレッドに短い共感・反応で割り込んで露出を取る方が自然な投稿(会話的・あるある・伸び始めのバズへの相乗り)。これが主力・デフォルト。迷ったら reply。
 - quote: 自分のフォロワーに広める価値があり、自分の視点や一次情報を一段添えたい投稿(ニュース/知見/主張の紹介＋自分の意見)。
 
-本文ルール:
+本文ルール(この本文は叩き台。後段でウェブ検索つきに作り直すので、ここでは方向性が分かれば十分):
 - 必ず140字(日本語の字数)以内。1字も超えない。
-- 具体や知識は無理に足さない。素の共感・面白がり・一言ツッコミでよい(「あ、そうですよね」「これ面白い」「わかる」級)。短く本音っぽいほど伸びる。
-- 媚びすぎ・定型の褒めは避ける。賢く見せようと説明的・解説的になるのはもっと避ける。本人の口調を保つ。
-- 案ごとに長さをばらす(ごく短い一言〜しっかり具体まで)。全案を同じ長さにしない。
+- reply は短く簡単に(ひと言〜短い一文)。素の共感・面白がり・一言ツッコミでよい。説明的にしない。
+- quote は自分の視点や一次情報を一段だけ添える(reply より少し長くてよい)。
+- 媚びすぎ・定型の褒めは避ける。本人の口調を保つ。
 - reason には選んだ理由と型の判断根拠を日本語で簡潔に書く。
 
 {guide}""".strip()

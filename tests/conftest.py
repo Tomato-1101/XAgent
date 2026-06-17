@@ -68,12 +68,12 @@ class FakeFormatter:
         ]
 
     def generate_reply(self, target_text, target_handle="", style_guide="", examples=None,
-                       playbook=""):
+                       playbook="", target_tweet_id=""):
         self.playbooks.append(playbook)
         return FormatResult([f"返信案: {target_text[:10]}"], folded=False)
 
     def generate_quote(self, target_text, target_handle="", style_guide="", examples=None,
-                       playbook=""):
+                       playbook="", target_tweet_id=""):
         self.playbooks.append(playbook)
         return FormatResult([f"引用案: {target_text[:10]}"], folded=False)
 

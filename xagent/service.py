@@ -258,15 +258,48 @@ def recast_engage_draft(
         res = formatter.generate_quote(
             draft.target_text or "", draft.target_handle or "", active_style_guide(session),
             playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
+            target_tweet_id=draft.target_tweet_id or "",
         )
         note = "recast-quote"
     else:
         res = formatter.generate_reply(
             draft.target_text or "", draft.target_handle or "", active_style_guide(session),
             playbook=templates_mod.active_body(session, TemplateKind.REPLY),
+            target_tweet_id=draft.target_tweet_id or "",
         )
         note = "recast-reply"
     draft.kind = to_kind
+    draft.segments_json = json.dumps(res.segments, ensure_ascii=False)
+    return _finalize_draft(session, formatter, draft, note)
+
+
+def regenerate_engage_draft(
+    session: Session, formatter: Formatter, draft: Draft
+) -> Draft:
+    """絡みの下書きの本文だけを、同じ型(reply/quote)のままウェブ検索つきで作り直す。
+
+    型は変えない(型を変えたいときは recast_engage_draft)。Inboxの[リプ案を再生成]から
+    呼ばれる。元ポスト(target_*)は引き継ぐ。未承認(DRAFT)の REPLY/QUOTE のみ可。
+    """
+    pair = {DraftKind.REPLY, DraftKind.QUOTE}
+    if draft.status != DraftStatus.DRAFT:
+        raise PolicyViolation("未承認の下書きのみ再生成できます。")
+    if draft.kind not in pair:
+        raise PolicyViolation("リプライか引用RTの絡み案のみ再生成できます。")
+    if draft.kind == DraftKind.QUOTE:
+        res = formatter.generate_quote(
+            draft.target_text or "", draft.target_handle or "", active_style_guide(session),
+            playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
+            target_tweet_id=draft.target_tweet_id or "",
+        )
+        note = "regenerate-quote"
+    else:
+        res = formatter.generate_reply(
+            draft.target_text or "", draft.target_handle or "", active_style_guide(session),
+            playbook=templates_mod.active_body(session, TemplateKind.REPLY),
+            target_tweet_id=draft.target_tweet_id or "",
+        )
+        note = "regenerate-reply"
     draft.segments_json = json.dumps(res.segments, ensure_ascii=False)
     return _finalize_draft(session, formatter, draft, note)
 

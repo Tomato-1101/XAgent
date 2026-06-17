@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # ジョブ化済みでブラウザfetchの300秒制約は無くなったため、打ち切らず長く待つ
     # (途中で切ると直前の候補収集10分超のAPI消費が無駄になる)。
     claude_cli_select_timeout_seconds: int = 900
+    # 返信案のリサーチ付き生成(WebSearch/WebFetchツールを使う単発)は、検索ターンで
+    # 既定240秒を超えることがあるため専用の長いタイムアウト。
+    claude_cli_research_timeout_seconds: int = 480
 
     # --- X API (OAuth1.0a: 投稿/書込, Bearer: 読取) ---
     x_api_key: str | None = None

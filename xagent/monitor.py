@@ -297,6 +297,43 @@ def collect_engage_candidates(
     return out[:SELECT_MAX_CANDIDATES]
 
 
+def _research_engage_body(
+    session: Session,
+    formatter: Formatter,
+    s: dict,
+    note: Callable[[str], None],
+) -> str:
+    """選定された絡み案の本文を、ウェブ検索つきで作り直す(元投稿の文脈を調べてから書く)。
+
+    select_engagements が作った本文は叩き台。ここで WebSearch/WebFetch 付きの生成に置き換える。
+    失敗・タイムアウト時は叩き台(s["text"])にフォールバックする(候補収集に費やしたAPIを
+    無駄にしない・乱造ガードを崩さない)。
+    """
+    cand = s["candidate"]
+    kind = DraftKind.QUOTE if s["kind"] == "quote" else DraftKind.REPLY
+    target_text = cand.get("text", "")
+    target_handle = cand.get("handle") or ""
+    target_tweet_id = str(s.get("tweet_id", ""))
+    try:
+        if kind == DraftKind.QUOTE:
+            res = formatter.generate_quote(
+                target_text, target_handle, active_style_guide(session),
+                playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
+                target_tweet_id=target_tweet_id,
+            )
+        else:
+            res = formatter.generate_reply(
+                target_text, target_handle, active_style_guide(session),
+                playbook=templates_mod.active_body(session, TemplateKind.REPLY),
+                target_tweet_id=target_tweet_id,
+            )
+        body = (res.segments[0] if res.segments else "").strip()
+        return body or s["text"]
+    except Exception as e:  # noqa: BLE001 - リサーチ生成の失敗は叩き台で代替する
+        note(f"リサーチ生成に失敗、叩き台を使用: {str(e)[:80]}")
+        return s["text"]
+
+
 def run_once(
     session: Session, x_client: XClient, formatter: Formatter, me_user_id: str,
     max_drafts: int | None = None,
@@ -343,14 +380,15 @@ def run_once(
                 quote_playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
             )
             for i, s in enumerate(selections):
-                note(f"下書き作成中 {i + 1}/{len(selections)}件")
+                note(f"リサーチして本文作成中 {i + 1}/{len(selections)}件")
                 cand = s["candidate"]
                 kind = DraftKind.QUOTE if s["kind"] == "quote" else DraftKind.REPLY
+                body = _research_engage_body(session, formatter, s, note)
                 create_engage_draft_from_text(
                     session,
                     kind,
                     s["tweet_id"],
-                    s["text"],
+                    body,
                     target_text=cand.get("text", ""),
                     target_handle=cand.get("handle"),
                     target_created_at=cand.get("created_at"),
@@ -446,11 +484,12 @@ def run_celeb_once(
             quote_playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
         )
         for i, s in enumerate(selections):
-            note(f"下書き作成中 {i + 1}/{len(selections)}件")
+            note(f"リサーチして本文作成中 {i + 1}/{len(selections)}件")
             cand = s["candidate"]
             kind = DraftKind.QUOTE if s["kind"] == "quote" else DraftKind.REPLY
+            body = _research_engage_body(session, formatter, s, note)
             create_engage_draft_from_text(
-                session, kind, s["tweet_id"], s["text"],
+                session, kind, s["tweet_id"], body,
                 target_text=cand.get("text", ""),
                 target_handle=cand.get("handle"),
                 target_created_at=cand.get("created_at"),
@@ -539,11 +578,12 @@ def run_buzz_once(
             quote_playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
         )
         for i, s in enumerate(selections):
-            note(f"下書き作成中 {i + 1}/{len(selections)}件")
+            note(f"リサーチして本文作成中 {i + 1}/{len(selections)}件")
             cand = s["candidate"]
             kind = DraftKind.QUOTE if s["kind"] == "quote" else DraftKind.REPLY
+            body = _research_engage_body(session, formatter, s, note)
             create_engage_draft_from_text(
-                session, kind, s["tweet_id"], s["text"],
+                session, kind, s["tweet_id"], body,
                 target_text=cand.get("text", ""),
                 target_handle=cand.get("handle"),
                 target_created_at=cand.get("created_at"),

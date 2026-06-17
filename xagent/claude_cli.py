@@ -49,14 +49,25 @@ def run_claude(
     settings: Settings,
     json_schema: dict | None = None,
     timeout: int | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> ClaudeCliResult:
-    """使い捨ての claude セッションを1回実行し、結果テキスト/構造化出力/usage を返す。"""
+    """使い捨ての claude セッションを1回実行し、結果テキスト/構造化出力/usage を返す。
+
+    allowed_tools を渡すと、その組み込みツール(例: WebSearch/WebFetch)だけを有効化し、
+    -p では権限プロンプトを出せないため bypassPermissions で自律実行させる(返信案のリサーチ用)。
+    有効化対象を読み取り系に限るので Bash/Edit 等は使えないまま。既定(None)は全ツール無効。
+    """
     cmd = [
         _resolve_cli(settings),
         "-p",
         "--model", settings.claude_model,
         "--system-prompt", system,
-        "--tools", "",
+    ]
+    if allowed_tools:
+        cmd += ["--tools", ",".join(allowed_tools), "--permission-mode", "bypassPermissions"]
+    else:
+        cmd += ["--tools", ""]
+    cmd += [
         "--output-format", "json",
         "--no-session-persistence",
         "--setting-sources", "",
