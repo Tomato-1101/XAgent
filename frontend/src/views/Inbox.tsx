@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { Badge, Button, Input, Spinner } from "../components/ui";
+import { Badge, Button, Input, Spinner, Textarea } from "../components/ui";
 import { DraftCard, charCount } from "../components/DraftCard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
@@ -53,11 +53,14 @@ export default function Inbox({ me }: { me: Me | null }) {
   const [runLimit, setRunLimit] = useState(10); // 1回実行で作る上限(乱造防止・既定10)
   const [runProgress, setRunProgress] = useState<string | null>(null); // 監視1回実行の進捗
   const [quoteUrl, setQuoteUrl] = useState(""); // 手動で引用案を作る対象ツイートURL
+  const [quotePrompt, setQuotePrompt] = useState(""); // 引用案生成の方向性指示(任意・空でお任せ)
+  const [quoteCount, setQuoteCount] = useState(1); // 1回で出す引用案のパターン数(1〜5・既定1)
   const [quoting, setQuoting] = useState(false);
   const [quoteProgress, setQuoteProgress] = useState<string | null>(null); // 引用案生成の進捗
   const [pending, setPending] = useState<Draft | null>(null);
   const [recastingId, setRecastingId] = useState<number | null>(null); // 型切替中の案id
   const [regeneratingId, setRegeneratingId] = useState<number | null>(null); // 再生成中の案id
+  const [regenPrompt, setRegenPrompt] = useState<Record<number, string>>({}); // 各案の再生成方向性
   const [actionProgress, setActionProgress] = useState<string | null>(null); // 型切替/再生成の進捗
   const toast = useToast();
   const { gate, element: blackoutGate } = useBlackoutGate();
@@ -142,9 +145,14 @@ export default function Inbox({ me }: { me: Me | null }) {
     setInfo(null);
     setQuoteProgress("開始しています…");
     try {
-      await api.quoteFromUrl(url, (msg, sec) => setQuoteProgress(progressLabel(msg, sec)));
+      await api.quoteFromUrl(
+        url,
+        { userPrompt: quotePrompt.trim() || undefined, count: quoteCount },
+        (msg, sec) => setQuoteProgress(progressLabel(msg, sec)),
+      );
       setQuoteUrl("");
-      setInfo("引用案を生成しました。下の「引用案」に表示されます。");
+      setQuotePrompt("");
+      setInfo(`引用案を${quoteCount}件生成しました。下の「引用案」に表示されます。`);
       reload();
     } catch (e) {
       setError(String(e));
@@ -191,8 +199,15 @@ export default function Inbox({ me }: { me: Me | null }) {
     setError(null);
     setActionProgress(progressLabel("開始しています…", 0));
     try {
-      await api.regenerateDraft(d.id, (msg, sec) => setActionProgress(progressLabel(msg, sec)));
-      toast({ tone: "success", message: "リプ案を再生成しました。" });
+      await api.regenerateDraft(
+        d.id,
+        regenPrompt[d.id]?.trim() || undefined,
+        (msg, sec) => setActionProgress(progressLabel(msg, sec)),
+      );
+      toast({
+        tone: "success",
+        message: d.kind === "reply" ? "リプ案を再生成しました。" : "引用案を再生成しました。",
+      });
       reload();
     } catch (e) {
       setError(String(e));
@@ -261,6 +276,17 @@ export default function Inbox({ me }: { me: Me | null }) {
   function renderCard(d: Draft) {
     // 返信はX APIの制限(未engage会話への返信=403)で送信できない → 手動送信導線にする。
     const isReply = d.kind === "reply";
+    // 再生成の方向性入力(任意)。reply/quote 両カードで共通。空ならお任せ生成。
+    const regenField = (
+      <Input
+        type="text"
+        className="mt-1 w-full text-xs"
+        placeholder="再生成の方向性（任意・空でお任せ。例: もっと煽り強めで）"
+        value={regenPrompt[d.id] ?? ""}
+        disabled={regeneratingId === d.id}
+        onChange={(e) => setRegenPrompt((m) => ({ ...m, [d.id]: e.target.value }))}
+      />
+    );
     return (
       <DraftCard
         key={d.id}
@@ -294,6 +320,7 @@ export default function Inbox({ me }: { me: Me | null }) {
               <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
                 却下
               </Button>
+              {regenField}
               {(recastingId === d.id || regeneratingId === d.id) && actionProgress && (
                 <span className="flex w-full items-center gap-1 text-xs text-amber-300/90">
                   <Spinner /> {actionProgress}
@@ -339,6 +366,7 @@ export default function Inbox({ me }: { me: Me | null }) {
               <Button size="sm" variant="ghost" onClick={() => act(() => api.reject(d.id))}>
                 却下
               </Button>
+              {regenField}
               {(recastingId === d.id || regeneratingId === d.id) && actionProgress && (
                 <span className="flex w-full items-center gap-1 text-xs text-amber-300/90">
                   <Spinner /> {actionProgress}
@@ -392,12 +420,11 @@ export default function Inbox({ me }: { me: Me | null }) {
         </div>
       </div>
 
-      <div className="flex flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-2 sm:flex-row sm:items-center">
-        <span className="shrink-0 text-xs text-zinc-500">URLから引用案を作る</span>
+      <div className="flex flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-2">
+        <span className="text-xs text-zinc-500">URLから引用案を作る</span>
         <Input
           type="text"
           placeholder="https://x.com/.../status/..."
-          className="flex-1"
           value={quoteUrl}
           disabled={quoting}
           onChange={(e) => setQuoteUrl(e.target.value)}
@@ -405,14 +432,38 @@ export default function Inbox({ me }: { me: Me | null }) {
             if (e.key === "Enter") makeQuoteFromUrl();
           }}
         />
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={makeQuoteFromUrl}
-          disabled={quoting || !quoteUrl.trim()}
-        >
-          {quoting ? <Spinner /> : "引用案を作る"}
-        </Button>
+        <Textarea
+          rows={2}
+          placeholder="方向性の指示（任意）例: 速報トーンで／数字を前面に／自分の運用経験を一次情報として添える。空欄ならAIにお任せ。"
+          value={quotePrompt}
+          disabled={quoting}
+          onChange={(e) => setQuotePrompt(e.target.value)}
+        />
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-zinc-500">
+            パターン数
+            <Input
+              type="number"
+              min={1}
+              max={5}
+              className="w-16"
+              value={quoteCount}
+              disabled={quoting}
+              onChange={(e) =>
+                setQuoteCount(Math.max(1, Math.min(5, Math.floor(Number(e.target.value) || 1))))
+              }
+            />
+          </label>
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto"
+            onClick={makeQuoteFromUrl}
+            disabled={quoting || !quoteUrl.trim()}
+          >
+            {quoting ? <Spinner /> : "引用案を作る"}
+          </Button>
+        </div>
       </div>
 
       <AgentHint title="絡みをClaude Codeに任せる" phrases={AGENT_PHRASES} />

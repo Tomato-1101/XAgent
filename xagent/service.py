@@ -221,10 +221,12 @@ def create_quote_draft(
     target_text: str,
     target_handle: str | None = None,
     target_created_at: datetime | None = None,
+    user_prompt: str = "",
 ) -> Draft:
     res = formatter.generate_quote(
         target_text, target_handle or "", active_style_guide(session),
         playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
+        user_prompt=user_prompt,
     )
     draft = Draft(
         kind=DraftKind.QUOTE,
@@ -236,6 +238,34 @@ def create_quote_draft(
         target_created_at=to_naive_utc(target_created_at),  # 引用元の投稿時刻(取得できた時のみ)
     )
     return _finalize_draft(session, formatter, draft, "quote")
+
+
+def create_quote_drafts(
+    session: Session,
+    formatter: Formatter,
+    target_tweet_id: str,
+    target_text: str,
+    target_handle: str | None = None,
+    target_created_at: datetime | None = None,
+    user_prompt: str = "",
+    count: int = 1,
+) -> list[Draft]:
+    """URLから引用案を count 件作る(Inboxの手動生成・パターン数指定)。
+
+    各案は generate_quote を独立に呼ぶ(各回リサーチ=コスト増だが切り口の違う案が出る)。
+    count は乱造防止のため 1〜5 にクランプ。
+    """
+    count = max(1, min(count, 5))
+    drafts = []
+    for _ in range(count):
+        drafts.append(
+            create_quote_draft(
+                session, formatter, target_tweet_id, target_text,
+                target_handle=target_handle, target_created_at=target_created_at,
+                user_prompt=user_prompt,
+            )
+        )
+    return drafts
 
 
 def recast_engage_draft(
@@ -274,12 +304,13 @@ def recast_engage_draft(
 
 
 def regenerate_engage_draft(
-    session: Session, formatter: Formatter, draft: Draft
+    session: Session, formatter: Formatter, draft: Draft, user_prompt: str = ""
 ) -> Draft:
     """絡みの下書きの本文だけを、同じ型(reply/quote)のままウェブ検索つきで作り直す。
 
     型は変えない(型を変えたいときは recast_engage_draft)。Inboxの[リプ案を再生成]から
     呼ばれる。元ポスト(target_*)は引き継ぐ。未承認(DRAFT)の REPLY/QUOTE のみ可。
+    user_prompt を渡すと今回の作り直しに方向性指示を反映する(空ならお任せ生成)。
     """
     pair = {DraftKind.REPLY, DraftKind.QUOTE}
     if draft.status != DraftStatus.DRAFT:
@@ -291,6 +322,7 @@ def regenerate_engage_draft(
             draft.target_text or "", draft.target_handle or "", active_style_guide(session),
             playbook=templates_mod.active_body(session, TemplateKind.QUOTE),
             target_tweet_id=draft.target_tweet_id or "",
+            user_prompt=user_prompt,
         )
         note = "regenerate-quote"
     else:
@@ -298,6 +330,7 @@ def regenerate_engage_draft(
             draft.target_text or "", draft.target_handle or "", active_style_guide(session),
             playbook=templates_mod.active_body(session, TemplateKind.REPLY),
             target_tweet_id=draft.target_tweet_id or "",
+            user_prompt=user_prompt,
         )
         note = "regenerate-reply"
     draft.segments_json = json.dumps(res.segments, ensure_ascii=False)

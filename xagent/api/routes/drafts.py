@@ -19,6 +19,7 @@ from ..schemas import (
     PostNowRequest,
     QueueRequest,
     RecastRequest,
+    RegenerateRequest,
     UpdateDraftRequest,
     draft_to_read,
 )
@@ -141,6 +142,7 @@ def recast(
 @router.post("/{draft_id}/regenerate")
 def regenerate(
     draft_id: int,
+    req: RegenerateRequest = RegenerateRequest(),
     session: Session = Depends(db_session),
     formatter: Formatter = Depends(get_formatter),
     session_factory: Callable[[], Session] = Depends(get_session_factory),
@@ -149,7 +151,7 @@ def regenerate(
 
     型は変えない(型切替は /recast)。Inboxの[リプ案を再生成]から呼ばれる。未承認の
     REPLY/QUOTE のみ可。本文のAIリサーチ生成に数十秒〜数分かかるため job_id を即返し、
-    フロントが /jobs/{id} をポーリングする。
+    フロントが /jobs/{id} をポーリングする。body の user_prompt(任意)で方向性を指示できる。
     """
     _load(session, draft_id)  # 404 だけは即返す
 
@@ -159,7 +161,7 @@ def regenerate(
             d = service.get_draft(s, draft_id)
             if d is None:
                 raise PolicyViolation("下書きが見つかりません。")
-            service.regenerate_engage_draft(s, formatter, d)
+            service.regenerate_engage_draft(s, formatter, d, user_prompt=req.user_prompt or "")
             return draft_to_read(d).model_dump(mode="json")
 
     return {"job_id": start_job(_run, label="regenerate")}

@@ -106,6 +106,14 @@ class QuoteFromUrlRequest(BaseModel):
     """URLから引用案(引用RT)をAIに生成させるための入力(Inboxの手動ボタン)。"""
 
     url: str  # x.com/.../status/<id> 形式のツイートURL
+    user_prompt: str | None = None  # 方向性指示(任意・空でお任せ生成)
+    count: int = 1                  # 1回で出す案の数(service側で1〜5にクランプ)
+
+
+class RegenerateRequest(BaseModel):
+    """絡みの下書きを再生成する(Inboxの再生成ボタン)。body省略可。"""
+
+    user_prompt: str | None = None  # 再生成の方向性指示(任意・空でお任せ)
 
 
 class RecastRequest(BaseModel):

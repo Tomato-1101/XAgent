@@ -105,6 +105,18 @@ def _guide_with_playbook(playbook: str, style_guide: str, examples: list[str] | 
     return "\n\n".join(parts)
 
 
+def _user_direction_block(user_prompt: str) -> str:
+    """UIでユーザーが入れた今回限りの方向性指示。空なら何も足さない。"""
+    if not user_prompt.strip():
+        return ""
+    return (
+        "## 追加指示(ユーザー指定・最優先)\n"
+        "以下は今回の生成にユーザーが与えた方向性。リサーチの軸とし本文に最優先で反映する"
+        "(口調・型・140字制限は維持)。\n"
+        f"{user_prompt.strip()}"
+    )
+
+
 class Formatter:
     def __init__(
         self,
@@ -262,7 +274,14 @@ class Formatter:
         examples: list[str] | None = None,
         playbook: str = "",
         target_tweet_id: str = "",
+        user_prompt: str = "",
     ) -> FormatResult:
+        guide = "\n\n".join(
+            b for b in (
+                _user_direction_block(user_prompt),
+                _guide_with_playbook(playbook, style_guide, examples),
+            ) if b
+        )
         system = f"""あなたは日本語Xアカウントの運用アシスタント。相手の投稿への自然なリプライ案を1つ作る。
 
 まず相手の投稿の話題・固有名詞・最新の文脈を WebSearch(必要なら投稿URLを WebFetch)で軽く調べ、
@@ -275,7 +294,7 @@ class Formatter:
 - 媚びすぎ・定型の褒めは避ける。賢く見せようと説明的・解説的になるのはもっと避ける。本人の口調を保つ。リプ欄で伸びる(共感/あるある/軽いツッコミ)バズの形を意識する。
 - 出力はリプライ本文のみ。字数・型・狙いなどの自己解説や「---」区切りの注記を一切付けない。
 
-{_guide_with_playbook(playbook, style_guide, examples)}""".strip()
+{guide}""".strip()
         url = _tweet_url(target_handle, target_tweet_id)
         user = f"相手(@{target_handle})の投稿:\n{target_text}"
         if url:
@@ -292,7 +311,14 @@ class Formatter:
         examples: list[str] | None = None,
         playbook: str = "",
         target_tweet_id: str = "",
+        user_prompt: str = "",
     ) -> FormatResult:
+        guide = "\n\n".join(
+            b for b in (
+                _user_direction_block(user_prompt),
+                _guide_with_playbook(playbook, style_guide, examples),
+            ) if b
+        )
         system = f"""あなたは日本語Xアカウントの運用アシスタント。相手の投稿を引用RTする際の本文案を1つ作る。
 
 まず相手の投稿の話題・固有名詞・最新の文脈を WebSearch(必要なら投稿URLを WebFetch)で調べ、
@@ -304,7 +330,7 @@ class Formatter:
 - {_length_hint("quote")}
 - 本人の口調を保つ。拡散されやすい(視点が一つ立っている)バズの形を意識する。出力は引用本文のみ。字数・型・狙いなどの自己解説や「---」区切りの注記を一切付けない。
 
-{_guide_with_playbook(playbook, style_guide, examples)}""".strip()
+{guide}""".strip()
         url = _tweet_url(target_handle, target_tweet_id)
         user = f"引用する相手(@{target_handle})の投稿:\n{target_text}"
         if url:

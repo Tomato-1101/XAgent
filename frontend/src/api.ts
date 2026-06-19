@@ -216,10 +216,22 @@ export const api = {
   }) => req<Draft>("/compose/command", { method: "POST", body: JSON.stringify(payload) }),
 
   // URLから引用案(引用RT)をAIに生成させる(Inboxの手動ボタン)。ジョブ経由(数十秒〜数分)。
-  quoteFromUrl: (url: string, onProgress?: JobProgress) =>
-    runJob<Draft>(
+  // opts.userPrompt で方向性を指示、opts.count で案の数(1〜5)を指定。result は drafts 配列。
+  quoteFromUrl: (
+    url: string,
+    opts?: { userPrompt?: string; count?: number },
+    onProgress?: JobProgress,
+  ) =>
+    runJob<{ drafts: Draft[] }>(
       "/compose/quote-from-url",
-      { method: "POST", body: JSON.stringify({ url }) },
+      {
+        method: "POST",
+        body: JSON.stringify({
+          url,
+          user_prompt: opts?.userPrompt || undefined,
+          count: opts?.count ?? 1,
+        }),
+      },
       onProgress,
     ),
 
@@ -288,8 +300,13 @@ export const api = {
       onProgress,
     ),
   // 絡みの下書きの本文を、同じ型のままウェブ検索つきでAIに作り直させる(リプ案の再生成)。ジョブ経由。
-  regenerateDraft: (id: number, onProgress?: JobProgress) =>
-    runJob<Draft>(`/drafts/${id}/regenerate`, { method: "POST" }, onProgress),
+  // userPrompt で再生成の方向性を指示できる(空ならお任せ)。
+  regenerateDraft: (id: number, userPrompt?: string, onProgress?: JobProgress) =>
+    runJob<Draft>(
+      `/drafts/${id}/regenerate`,
+      { method: "POST", body: JSON.stringify({ user_prompt: userPrompt || undefined }) },
+      onProgress,
+    ),
 
   getStyle: () => req<{ guide_text: string; examples: string[] }>("/style"),
   putStyle: (guide_text: string) =>

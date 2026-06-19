@@ -42,6 +42,7 @@ class FakeFormatter:
 
     def __init__(self):
         self.playbooks = []          # 整形に渡された playbook を順に記録
+        self.user_prompts = []       # reply/quote 生成に渡された user_prompt を順に記録
         self.complete_return = None  # set すると complete() がこれを返す
         self.engage_kind_return = "reply"  # select_engagements の既定の型(テストで切替)
         self.select_calls = []       # select_engagements の呼び出し内容を記録(検証用)
@@ -68,13 +69,15 @@ class FakeFormatter:
         ]
 
     def generate_reply(self, target_text, target_handle="", style_guide="", examples=None,
-                       playbook="", target_tweet_id=""):
+                       playbook="", target_tweet_id="", user_prompt=""):
         self.playbooks.append(playbook)
+        self.user_prompts.append(user_prompt)
         return FormatResult([f"返信案: {target_text[:10]}"], folded=False)
 
     def generate_quote(self, target_text, target_handle="", style_guide="", examples=None,
-                       playbook="", target_tweet_id=""):
+                       playbook="", target_tweet_id="", user_prompt=""):
         self.playbooks.append(playbook)
+        self.user_prompts.append(user_prompt)
         return FormatResult([f"引用案: {target_text[:10]}"], folded=False)
 
     def select_engagements(self, candidates, max_n, style_guide="", examples=None,

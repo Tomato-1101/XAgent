@@ -360,13 +360,44 @@ def test_quote_from_url_ai_generates_quote(client):
             client.post("/compose/quote-from-url", json={"url": "https://x.com/famous/status/777"}),
         )
         assert j["status"] == "done"
-        d = j["result"]
+        drafts = j["result"]["drafts"]
+        assert len(drafts) == 1
+        d = drafts[0]
         assert d["kind"] == "quote"
         assert d["target_tweet_id"] == "777"
         assert d["target_text"] == "引用元の本文"
         assert d["target_handle"] == "famous"
     finally:
         app.dependency_overrides.pop(get_x_client_optional, None)
+
+
+def test_quote_from_url_count_and_prompt(client):
+    """count を指定すると複数案を作り、user_prompt は formatter に渡る。"""
+    from xagent.api.deps import get_formatter, get_x_client_optional
+
+    fx = FakeXClient(
+        tweets={"777": {"id": "777", "text": "引用元の本文", "author_handle": "famous"}}
+    )
+    fmt = FakeFormatter()
+    app.dependency_overrides[get_x_client_optional] = lambda: fx
+    app.dependency_overrides[get_formatter] = lambda: fmt
+    try:
+        j = wait_job(
+            client,
+            client.post(
+                "/compose/quote-from-url",
+                json={"url": "https://x.com/famous/status/777", "count": 3, "user_prompt": "速報トーンで"},
+            ),
+        )
+        assert j["status"] == "done"
+        drafts = j["result"]["drafts"]
+        assert len(drafts) == 3
+        assert all(d["kind"] == "quote" for d in drafts)
+        # 3案とも方向性指示が formatter に渡っている
+        assert fmt.user_prompts == ["速報トーンで", "速報トーンで", "速報トーンで"]
+    finally:
+        app.dependency_overrides.pop(get_x_client_optional, None)
+        app.dependency_overrides.pop(get_formatter, None)
 
 
 def test_quote_from_url_rejects_non_url(client):

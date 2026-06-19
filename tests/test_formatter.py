@@ -41,6 +41,24 @@ def test_playbook_injected_into_reply_and_quote():
     assert "引用型Q" in cap2["system"]
 
 
+def test_user_prompt_injected_into_reply_and_quote():
+    f, cap = _capturing_formatter()
+    f.generate_reply("相手の投稿", "someone", user_prompt="速報トーンで煽る")
+    assert "追加指示(ユーザー指定・最優先)" in cap["system"]
+    assert "速報トーンで煽る" in cap["system"]
+
+    f2, cap2 = _capturing_formatter()
+    f2.generate_quote("引用元", "someone", user_prompt="数字を前面に")
+    assert "追加指示(ユーザー指定・最優先)" in cap2["system"]
+    assert "数字を前面に" in cap2["system"]
+
+
+def test_no_user_prompt_means_no_direction_block():
+    f, cap = _capturing_formatter()
+    f.generate_quote("引用元", "someone")
+    assert "追加指示(ユーザー指定" not in cap["system"]
+
+
 def test_variations_inject_playbook():
     f, cap = _capturing_formatter()
     # 区切りの無い出力でも1案にフォールバックする。systemに型が乗ることだけ見る
