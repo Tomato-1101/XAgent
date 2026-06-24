@@ -240,6 +240,42 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 | `last_digest_id` | `int` | `0` | 処理済みダイジェストのカーソル(`genredigest.id`)。同じニュースを二度生成しない |
 | `updated_at` | `datetime` | `_utcnow` | |
 
+#### `PostSettings`(`postsettings`)— オリジナル投稿の叩き台生成の設定【単一行 id=1 運用】
+
+フォロー転換の受け皿=オリジナル発信を補うための「叩き台」生成(A機能)の設定。`post_gen.get/set_post_settings`。
+
+| フィールド | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `auto_post_gen_enabled` | `bool` | `False` | オリジナル投稿の叩き台の自動生成(post_gen_tick)を回すか。UI(Settings)のトグルで制御。乱造防止のため既定OFF。OFFなら即returnしAPI消費なし |
+| `max_posts_per_run` | `int` | `2` | 1回の生成で作る叩き台の上限(バッチAI生成の `max_n`) |
+| `post_backlog_max` | `int` | `10` | 承認待ち(DRAFT)のPOST下書きがこれ以上なら自動tickは生成スキップ(乱造ガード)。手動「今すぐ生成」はこのガードを通らない |
+| `themes_json` | `str` | `'[...AI×営業の切り口4件...]'` | 叩き台のテーマ角度(JSON配列)。各角度から型に沿った下書きを生成 |
+| `updated_at` | `datetime` | `_utcnow` | |
+
+#### `MetricsSettings`(`metricssettings`)— 自分の投稿メトリクス取得の設定【単一行 id=1 運用】
+
+自分の投稿の実績を数字で追うための取得(B機能)の設定。**読み取りのみ・無害ゆえ既定ON**。`metrics.get/set_metrics_settings`。
+
+| フィールド | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `metrics_enabled` | `bool` | `True` | 自分の投稿メトリクスの自動取得(metrics_tick)を回すか。読み取りのみで投稿しないため既定ON。UI(Analytics)のトグルで制御 |
+| `lookback_days` | `int` | `30` | 何日分の自分の投稿を取得するか(`get_users_tweets` の `start_time`) |
+| `updated_at` | `datetime` | `_utcnow` | |
+
+#### `PostMetric`(`postmetric`)— 自分の投稿の実績メトリクス(種別別の改善追跡)
+
+公式API(`get_users_tweets`+`non_public_metrics`)で取得した自分の投稿の実績を `tweet_id` で upsert する。インプレッションは自分のツイートのみ取れる `non_public_metrics`(OAuth1.0a user context・twitterapi.io では取得不可)。
+
+| フィールド | 型 | 既定 | 意味 |
+|---|---|---|---|
+| `tweet_id` | `str` | `index=True` | ツイートID(upsertキー) |
+| `kind` | `str` | (必須) | 種別(post/reply/quote/repost)。`referenced_tweets` から判定 |
+| `text` | `str` | `""` | 本文 |
+| `created_at` | `datetime?` | `None` | 投稿時刻(naive UTC) |
+| `captured_at` | `datetime` | (必須) | このメトリクスを取得した時刻 |
+| `impression_count` | `int?` | `None` | インプレッション(non_public→public の順で採用。取れなければ None) |
+| `like_count` / `retweet_count` / `reply_count` / `quote_count` / `bookmark_count` | `int` | `0` | public_metrics 由来 |
+
 #### `BlackoutSettings`(`blackoutsettings`)— 投稿禁止時間帯【単一行 id=1 運用】
 
 | フィールド | 型 | 既定 | 意味 |
@@ -276,7 +312,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 
 ### 単一行(シングルトン)テーブルの運用
 
-`StyleProfile`(name=default)/`MonitorSettings`(id=1)/`BlackoutSettings`(id=1)/`NewsSettings` はいずれも「単一行運用」だが、DB 制約ではなく利用側コードが保証する。`get_monitor_settings` / `get_blackout_settings` / `get_news_settings` は先頭行を返し、無ければ既定値で作成・commit する(`StyleProfile` は `set_style_guide` が name=default で upsert)。
+`StyleProfile`(name=default)/`MonitorSettings`(id=1)/`BlackoutSettings`(id=1)/`NewsSettings`/`PostSettings`(id=1)/`MetricsSettings`(id=1) はいずれも「単一行運用」だが、DB 制約ではなく利用側コードが保証する。`get_monitor_settings` / `get_blackout_settings` / `get_news_settings` / `post_gen.get_post_settings` / `metrics.get_metrics_settings` は先頭行を返し、無ければ既定値で作成・commit する(`StyleProfile` は `set_style_guide` が name=default で upsert)。
 
 ### マイグレーション(`db._migrate` / `_ADDED_COLUMNS`)
 
@@ -290,7 +326,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 
 ### シード(`templates.seed_builtin_templates`)
 
-`_BUILTIN` の4型を投入: `("バズの型 (buzz-playbook)", POST, POST_PLAYBOOK)`、`("絡みリプの型 (R1〜R6)", REPLY, REPLY_PLAYBOOK)`、`("引用RTの型", QUOTE, QUOTE_PLAYBOOK)`、`("ニュース速報の型 (N1〜N5)", NEWS, NEWS_PLAYBOOK)`。本文は `xagent/prompts.py` の定数。**冪等性は `name` の完全一致で判定**(同名が既存ならスキップ)、`builtin=True` で作成。投入後、各 kind に active が無ければ `created_at` 昇順先頭を `set_active`。戻り値は新規投入件数。
+`_BUILTIN` の4型を投入: `("バズの型 (buzz-playbook)", POST, POST_PLAYBOOK)`、`("絡みリプの型 (R1〜R6)", REPLY, REPLY_PLAYBOOK)`、`("引用RTの型", QUOTE, QUOTE_PLAYBOOK)`、`("ニュース速報の型 (N1〜N5)", NEWS, NEWS_PLAYBOOK)`。本文は `xagent/prompts.py` の定数。判定は `name` の完全一致: 同名が無ければ `builtin=True` で新規投入、**同名が既存かつ `builtin=True` かつ本文が変わっていれば本文を最新へ同期する**(`exists.body != body` を上書き)。これにより `prompts.py` の型テキスト(POST/REPLY/QUOTE/NEWS の各 PLAYBOOK)を更新すると、再 `init_db`(=worker 再起動/--reload)時に既存DB行へ自動反映される。ユーザーが編集/作成した型(`builtin=False`)は上書きしない。投入後、各 kind に active が無ければ `created_at` 昇順先頭を `set_active`。戻り値は新規投入件数(本文同期はカウントしない)。
 
 エッジケース: **ユーザーがビルトインの型を改名すると、再 `init_db` で同名扱いされず重複投入される**(`builtin` フラグはスキップ判定に使われない)。
 
@@ -380,6 +416,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 - **型ライブラリ(PromptTemplate)**: POST/REPLY/QUOTE/NEWS の4カテゴリ。`POST_PLAYBOOK` の型 A〜P(J/O は欠番)、`REPLY_PLAYBOOK` の R1〜R6、`QUOTE_PLAYBOOK`、`NEWS_PLAYBOOK` の N1〜N5(大手ニュース系/個人解説系の実投稿から抽出した速報の型＋Xアルゴリズム対応の注意書き)。各 kind で active は最大1件(monitor / news の自動生成が既定として使う)。
 - **AI 自動選択(auto_template / choose_template)**: 「AIに任せる」。候補が0件→None、1件→そのID(LLM 呼ばず)、2件以上のときだけ LLM に id を選ばせる。候補集合に含まれる id のときだけ採用、解析失敗は None。
 - **指令解析(commands.parse_command)**: 自由文(例「このURLをリポストして、以下の文で投稿: …」)を `{action, target_url/tweet_id/handle, body, raw, note}` に構造化。ツイート URL 抽出は Python の正規表現で確定(LLM 誤りに依存しない)。「リポスト」は引用RT(quote)として扱う。**URL が無ければ quote→post に降格**、URL あり×quote では body から対象 URL を除去。
+- **オリジナル投稿の叩き台生成(A機能・`post_gen.run_post_gen_once` → `formatter.generate_post_drafts`)**: フォロー転換の受け皿=オリジナル発信を補うため、`PostSettings.themes_json` のテーマ角度から `POST_PLAYBOOK`＋口調ガイドに沿った投稿の叩き台を**1回のバッチAI生成**で作り `Draft(kind=POST, status=DRAFT)` 化する(投稿しない・人間承認必須)。**重要: AIに実績を捏造させない設計**——型・1行目フック・構成・末尾の問いまではAIが完成させるが、実体験・数字など一次情報は `〔ここに実際の○○〕` のプレースホルダで空け、ユーザーが埋める前提(空想でネタを作ると現状の弱点=薄さを再生産するため)。`source_text` に `[型/テーマ/埋める一次情報/AIメモ]` を保持。自動実行は `auto_post_gen_enabled`(既定OFF)＋承認待ちPOSTが `post_backlog_max` 以上で生成スキップ(乱造ガード)、手動は Settings「今すぐ生成」/ `POST /post-gen/run-once`(ジョブ化・ガード不適用)。
 
 ### 文体・学習
 
@@ -430,6 +467,7 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 
 - **分析(コスト)**: `ApiCostLog` を X API(read/write/tl)と Claude(llm)に分けて集計、合計も返す(`GET /analytics/cost`)。単価: READ $0.005/件、WRITE $0.01/件、TL $0.01/件、LLM はトークン換算(`LLM_PRICE_PER_MTOK={"input":5.0,"output":25.0}` USD/Mtok、claude-opus-4-8 価格)。実課金はサブスクリプション(Claude Code CLI)だが消費の可視化のため名目額を記録し続ける。
 - **分析(サマリ)**: 全 `DraftStatus` のステータス別下書き件数(`GET /analytics/summary`)。
+- **自分の投稿メトリクス(B機能・`metrics.collect_metrics_once` / `metrics_summary`)**: 改善を数字で追えるよう、自分の直近投稿の実績を公式API(`x_client.get_my_recent_tweets_with_metrics` = `get_users_tweets`＋`tweet_fields` に `public_metrics,non_public_metrics,created_at,referenced_tweets`)で取得し `PostMetric` に `tweet_id` で upsert する(**読み取りのみ・投稿しない**)。**インプレッションは自分のツイートのみ取れる `non_public_metrics`(OAuth1.0a user context・twitterapi.io では取得不可)**ゆえ `_read`(twitterapi.io)経由ではなく公式APIを直接使う。`metrics_summary` は種別(post/reply/quote/repost)別＋合計の件数・平均/中央インプ・平均いいね/RT/リプ/引用/ブックマークを集計(Analytics画面の「投稿パフォーマンス(種別別)」表)。自動取得は `MetricsSettings.metrics_enabled`(**読み取りで無害ゆえ既定ON**・`metrics_interval_seconds`=6時間毎)、手動は Analytics「今すぐ取得」/ `POST /metrics/run-once`(ジョブ化)。`GET /metrics/summary` が集計を返す。
 - **メディア(media)**: 画像(jpg/jpeg/png/webp/gif)最大4枚・動画(mp4/mov/m4v)1個・25MB上限。混在不可。保存は `<uuid4hex><ext>`、DB には相対パス。実際の X アップロードは投稿直前(`media_id` 失効回避)。
 - **おすすめ時間(recommended_times)**: UI 初期値用に重ならない直近 count 件のスロットを返す(`GET /schedule/recommended`)。tier は best(21時)/great(19・22時)/good(8・12・16時)。
 - **デーモントグル(auto_monitor_enabled・既定OFF)**: 絡み案の自動生成のみを UI(Settings)でオンオフ。OFF(既定)でもプロセスは止めず `monitor_tick` が即returnするだけ(API消費なし)。乱造防止のため既定OFF＝必要な時だけオンにし、終わったらオフに戻す運用。手動で1回だけ生成するなら Inbox「監視を1回実行」/ CLI `xagent monitor-once`。予約投稿の発火はこのトグルと無関係に常時動く。ニュース速報の自動生成も同じ思想で `NewsSettings.auto_news_enabled`(既定OFF・News 画面のトグル)、有名人ウォッチも `MonitorSettings.celeb_watch_enabled`、バズウォッチも `MonitorSettings.buzz_watch_enabled`(いずれも既定OFF・Settings のトグル)。
@@ -539,6 +577,23 @@ DB に依存させず純粋関数的に判定。`RateLimitConfig`(`max_per_day=1
 | PUT | `/news/settings` | 設定更新(`auto_news_enabled`/`genres_json`/`max_posts_per_run`、None 以外のみ部分更新) |
 | GET | `/news/recent` | 直近2日の対象ジャンルのニュース一覧(UI表示用)。XNewsBot の DB が読めなくても 500 にせず `{available: false, error}` を返す |
 
+### post-gen(`/post-gen`)— オリジナル投稿の叩き台生成(A機能)
+
+| メソッド | パス | 用途 |
+|---|---|---|
+| POST | `/post-gen/run-once` | 叩き台生成を1回実行。`?limit=N` でその回の生成上限を絞る。**ジョブ化: `{"job_id"}` を即返し**(label=`post-gen-run-once`)、結果 `{themes, created, draft_ids}` はジョブの result。手動実行は乱造ガードを通らない |
+| GET | `/post-gen/settings` | 叩き台生成設定取得(無ければ既定で作成) |
+| PUT | `/post-gen/settings` | 設定更新(`auto_post_gen_enabled`/`max_posts_per_run`/`post_backlog_max`/`themes_json`、None 以外のみ部分更新) |
+
+### metrics(`/metrics`)— 自分の投稿メトリクス(B機能・読み取りのみ)
+
+| メソッド | パス | 用途 |
+|---|---|---|
+| POST | `/metrics/run-once` | 自分の投稿メトリクス取得を1回実行(`XClient.from_settings` をジョブ内で構築)。**ジョブ化**(label=`metrics-run-once`)、結果 `{fetched, inserted, updated}`。**読み取りのみ・投稿しない** |
+| GET | `/metrics/summary` | 保存済みメトリクスの種別別+合計の集計(Analytics表示用)。`{total, by_kind, captured_at}` |
+| GET | `/metrics/settings` | メトリクス取得設定取得(無ければ既定で作成・既定ON) |
+| PUT | `/metrics/settings` | 設定更新(`metrics_enabled`/`lookback_days`、None 以外のみ部分更新) |
+
 ### schedule(`/schedule`)
 
 | メソッド | パス | 用途 |
@@ -641,8 +696,8 @@ Vite + React + TS + Tailwind の SPA。`App.tsx` がシェル、`api.ts` が唯�
 | **Lists** | X ネイティブ「リスト」管理 | 一覧/作成(改行・カンマ区切り)/設定保存/削除/メンバー追加・除外。`added`/`skipped` をトースト。最も状態が多い画面 |
 | **Templates** | 投稿/リプの「型」管理 | 種別ごと一覧、作成/編集/既定化(`activate`、1kind1つ)/削除。内蔵型も編集・削除可能 |
 | **Style** | 文体管理 | スタイルガイド(常時適用)保存、自分の過去投稿学習(`learn`)、アカウント学習(`learnProfile`、50/100/200件・is_self)、学習済みプロファイル一覧 |
-| **Analytics** | コスト・集計の閲覧専用 | `cost`(X API/Claude API 2カラム+内訳)、`summary`(ステータス別件数)。操作要素なし |
-| **Settings** | 監視・制限帯 | 監視ソーストグル(楽観的更新)、`max_drafts_per_run`、`min_impressions`(絡み候補の最低インプレッション・onBlur保存)、`auto_monitor_enabled`(絡み案の自動生成オンオフ・既定OFF)、**有名人ウォッチカード**(`celeb_watch_enabled` トグル・既定OFF、`celeb_list_id` の設定状況表示、「今すぐチェック」=`celebRunOnceStart`→`pollJob` 進捗表示でエラー/候補0/生成N件をトースト分岐)、**バズウォッチカード**(`buzz_watch_enabled` トグル・既定OFF、`buzz_min_faves` 入力・onBlur保存、「今すぐチェック」=`buzzRunOnceStart`→`pollJob` 同様のトースト分岐)、**twitterapi.io キー管理カード**(`TwitterApiKeys` コンポーネント。複数キーの追加/編集/↑↓並べ替え=`reorderTwitterApiKeys`/有効無効トグル/疎通テスト=`testTwitterApiKey`(成否を疎通ステータス表示)/削除(ConfirmDialog 確認)。キーは末尾4文字マスク表示、追加・差し替えは type=password で平文送信)、ブラックアウト編集(保存ボタンを押すまで反映されない) |
+| **Analytics** | コスト・集計・自分の投稿実績の閲覧 | `cost`(X API/Claude API 2カラム+内訳)、`summary`(ステータス別件数)、**「投稿パフォーマンス(種別別)」(B機能)**=`metricsSummary` を種別(オリジナル/リプライ/引用RT/リポスト)別+合計の表で表示(件数・平均/中央インプ・いいね・RT・リプ・引用・BM)、「今すぐ取得」(`metricsRunOnceStart`→`pollJob`、読み取りのみ)、自動取得トグル(`metrics_enabled`・既定ON)+取得日数(onBlur保存) |
+| **Settings** | 監視・制限帯 | 監視ソーストグル(楽観的更新)、`max_drafts_per_run`、`min_impressions`(絡み候補の最低インプレッション・onBlur保存)、`auto_monitor_enabled`(絡み案の自動生成オンオフ・既定OFF)、**有名人ウォッチカード**(`celeb_watch_enabled` トグル・既定OFF、`celeb_list_id` の設定状況表示、「今すぐチェック」=`celebRunOnceStart`→`pollJob` 進捗表示でエラー/候補0/生成N件をトースト分岐)、**バズウォッチカード**(`buzz_watch_enabled` トグル・既定OFF、`buzz_min_faves` 入力・onBlur保存、「今すぐチェック」=`buzzRunOnceStart`→`pollJob` 同様のトースト分岐)、**オリジナル投稿の叩き台生成カード(A機能)**(`auto_post_gen_enabled` トグル・既定OFF、`max_posts_per_run` 入力・onBlur保存、「今すぐ生成」=`postGenRunOnceStart`→`pollJob`。叩き台は型・フックまでAIが作り一次情報は〔 〕で空ける旨を注記)、**twitterapi.io キー管理カード**(`TwitterApiKeys` コンポーネント。複数キーの追加/編集/↑↓並べ替え=`reorderTwitterApiKeys`/有効無効トグル/疎通テスト=`testTwitterApiKey`(成否を疎通ステータス表示)/削除(ConfirmDialog 確認)。キーは末尾4文字マスク表示、追加・差し替えは type=password で平文送信)、ブラックアウト編集(保存ボタンを押すまで反映されない) |
 | **Agent** | 静的な説明画面 | Claude Code への話しかけ方(言う言葉→やること→等価CLI)を3カテゴリで表示。API 呼び出しなし |
 
 ### 主要共通コンポーネント
@@ -772,7 +827,7 @@ override: `ensure_not_blackout(in_blackout, override, reason)` は `in_blackout 
 
 ### 常駐デーモン(`daemon.py` + API 内蔵スケジューラ)
 
-3つのティック関数。いずれも例外を内部で握ってデーモンを止めない。
+ティック関数群。いずれも例外を内部で握ってデーモンを止めない。生成系(monitor/news/celeb/buzz/post_gen)は既定OFFトグルでゲート、読み取り系(metrics)のみ既定ON。
 
 | 関数 | ゲート | 動作 |
 |---|---|---|
@@ -780,13 +835,15 @@ override: `ensure_not_blackout(in_blackout, override, reason)` は `in_blackout 
 | `news_tick()` | `auto_news_enabled` が OFF(既定) なら**即 return**(XNewsBot の DB も LLM も触らない) | `news.run_news_once(...)`。新ダイジェスト検知で速報下書きを生成(ダイジェスト連動)、1件以上作れば `notify`。`NewsSourceUnavailable` は warning ログのみ(デーモンを止めない) |
 | `celeb_tick()` | `celeb_watch_enabled` が OFF(既定) **または `celeb_list_id` 未設定**なら**即 return**(API消費ゼロ) | `monitor.run_celeb_once(...)`。有名人のAI言及を検索検出して reply 案を生成、1件以上作れば `notify`。`XClientError` は warning ログのみ |
 | `buzz_tick()` | `buzz_watch_enabled` が OFF(既定)なら**即 return**。ONでも承認待ち絡み案が `BUZZ_BACKLOG_MAX=30` 件以上なら生成スキップ(乱造ガード) | `monitor.run_buzz_once(...)`。min_faves検索でバズ投稿を検出して絡み案を生成、1件以上作れば `notify`。`XClientError` は warning ログのみ |
+| `post_gen_tick()` | `auto_post_gen_enabled` が OFF(既定)なら**即 return**(API消費ゼロ)。ONでも承認待ち(DRAFT)のPOST下書きが `PostSettings.post_backlog_max`(既定10) 以上なら生成スキップ(乱造ガード) | `post_gen.run_post_gen_once(...)`。テーマ角度から型に沿った叩き台を生成、1件以上作れば `notify`。下書きのみ・自動投稿しない |
+| `metrics_tick()` | `metrics_enabled` が OFF なら**即 return**。**既定ON**(読み取りのみで無害ゆえ自動化) | `XClient.from_settings()` → `metrics.collect_metrics_once(...)`。自分の直近投稿の実績を取得して `PostMetric` に upsert(投稿しない)。`XClientError`/例外は warning ログのみ |
 | `queue_tick()` | ゲートなし(**常時実行**。「予約投稿は止めない」方針) | 発火のたびモジュール変数 `_last_queue_tick_at`(naive UTC)を更新(X資格情報の有無に関わらず先に。`/status` のハートビート)→ `process_due_queue(...)` |
 
 緊急停止の責務分担: 全投稿停止は `config.posting_enabled`、個別の制限帯/頻度ガードは `process_due_queue`→`post_draft`。`auto_post_enabled` は `queue_tick` のゲートに**使われていない**(未使用)。
 
 スケジューラ稼働の可視化: `lifespan` は `app.state.scheduler` に `BackgroundScheduler` を保持し、`queue` ジョブを `next_run_time=now` で登録して起動直後に1回発火させる(ハートビート即時化)。`GET /status` がこのハートビートとジョブの `next_run_time` から `healthy` を判定し、フロント App のサイドバーで「予約スケジューラ 稼働中/停止?」バッジに表示する(起動し忘れ・ハングをUIで検知)。
 
-実運用構成: API プロセスの `lifespan` 内で `BackgroundScheduler(timezone="UTC")` が `queue`(60秒)・`monitor`(180秒、`max_instances=1`, `coalesce=True`)・`news`(600秒、`max_instances=1`, `coalesce=True`)・`celeb`(600秒=`celeb_interval_seconds`、`max_instances=1`, `coalesce=True`)・`buzz`(600秒=`buzz_interval_seconds`、`max_instances=1`, `coalesce=True`)を登録。monitor は `auto_monitor_enabled`、news は `auto_news_enabled`、celeb は `celeb_watch_enabled`、buzz は `buzz_watch_enabled`(いずれも既定OFF)で内部ゲートされ、UIトグルONの時だけ実処理する。`daemon.run`(`BlockingScheduler` 版、CLI `xagent daemon`)は別経路で、launchd 常駐構成では実際に回るのは内蔵スケジューラ。
+実運用構成: API プロセスの `lifespan` 内で `BackgroundScheduler(timezone="UTC")` が `queue`(60秒)・`monitor`(180秒、`max_instances=1`, `coalesce=True`)・`news`(600秒、`max_instances=1`, `coalesce=True`)・`celeb`(600秒=`celeb_interval_seconds`、`max_instances=1`, `coalesce=True`)・`buzz`(600秒=`buzz_interval_seconds`、`max_instances=1`, `coalesce=True`)・`post_gen`(3600秒=`post_gen_interval_seconds`、`max_instances=1`, `coalesce=True`)・`metrics`(21600秒=6時間=`metrics_interval_seconds`、`max_instances=1`, `coalesce=True`)を登録。monitor は `auto_monitor_enabled`、news は `auto_news_enabled`、celeb は `celeb_watch_enabled`、buzz は `buzz_watch_enabled`、post_gen は `auto_post_gen_enabled`(いずれも既定OFF)で内部ゲートされUIトグルONの時だけ実処理する。metrics のみ `metrics_enabled`(**既定ON**・読み取りで無害)。`metrics` は `--reload` の再起動毎に毎回APIを叩かないよう起動時の `next_run_time=now` を付けず通常間隔で初回発火を待つ。`daemon.run`(`BlockingScheduler` 版、CLI `xagent daemon`)は別経路で、launchd 常駐構成では実際に回るのは内蔵スケジューラ。
 
 ---
 
