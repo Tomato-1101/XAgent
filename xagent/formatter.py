@@ -265,6 +265,103 @@ class Formatter:
             )
         return results
 
+    # --- オリジナル投稿の叩き台バッチ生成(型＋テーマ角度に沿った下書きを複数作る) ---
+    _POST_GEN_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "posts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "theme_index": {"type": "integer"},
+                        "type_label": {"type": "string"},
+                        "text": {"type": "string"},
+                        "fill_hint": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["theme_index", "type_label", "text", "fill_hint", "reason"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["posts"],
+        "additionalProperties": False,
+    }
+
+    def generate_post_drafts(
+        self,
+        themes: list[str],
+        max_n: int,
+        style_guide: str = "",
+        examples: list[str] | None = None,
+        playbook: str = "",
+    ) -> list[dict]:
+        """テーマ角度の一覧から、型に沿ったオリジナル投稿の「叩き台」を最大 max_n 件作る。
+
+        フォロー転換の受け皿=オリジナル発信が欠落しているのを補う。中身の核(実体験・数字)は
+        ユーザーが埋める前提なので、具体的な実績を創作させない。確証の無い固有の数字・体験は
+        〔 〕プレースホルダにし、ユーザーが自分の一次情報を埋められる叩き台にする。
+        返り値は {theme_index, theme, type_label, text, fill_hint, reason} のリスト。
+        """
+        if not themes or max_n <= 0:
+            return []
+        blocks = []
+        if playbook.strip():
+            blocks.append(f"## 使う型(このカタログから1つ選んで沿う)\n{playbook.strip()}")
+        sb = _style_block(style_guide, examples)
+        if sb:
+            blocks.append(sb)
+        guide = "\n\n".join(blocks)
+        system = f"""あなたは日本語Xアカウント(AI×営業の実務家)の運用アシスタント。与えられたテーマ角度の一覧から、フォロワーが増える型に沿ったオリジナル投稿の「叩き台」を最大{max_n}件作る。
+
+重要(叩き台の前提):
+- 中身の核となる実体験・数字・固有名詞はユーザー本人が埋める。具体的な実績(数字・社名・成果)を創作してはいけない(嘘の体験はアカウントの信頼を壊す)。
+- ユーザーが自分の一次情報を入れるべき箇所は 〔ここに実際の○○〕 の形のプレースホルダにする(例: 〔実際に短縮できた時間〕)。型・構成・フック・語り口は完成させ、事実部分だけ穴を空ける。
+
+選定・本文ルール:
+- テーマ角度ごとに最も合うバズの型を1つ選び、その狙いに沿って書く。保存(ブックマーク)・会話を生む型を優先。
+- 1行目で必ずスクロールを止める(数字/固有名詞/感情/逆説)。結論を先に。1投稿1メッセージ。
+- 1ツイートは140字(日本語の字数)以内を基本にする(スレッドにしない)。末尾に会話の余白(問い)を残してよい。
+- 本文に外部URLを入れない。ハッシュタグは0〜1個。絵文字は控えめ。
+- type_label には使ったバズの型(例:「D 素人の成功体験」「N 勘違い指摘」)を書く。
+- fill_hint にはユーザーが埋めるべき一次情報を日本語で簡潔に指示する(プレースホルダが無ければ「埋める箇所なし」)。
+- reason には、その角度をなぜこの型にしたかを簡潔に書く。
+
+{guide}""".strip()
+        lines = [
+            json.dumps({"theme_index": i, "theme": t}, ensure_ascii=False)
+            for i, t in enumerate(themes)
+        ]
+        user = (
+            "テーマ角度の一覧(1行1件のJSON)。各角度につき最大1案、合わせて最大"
+            f"{max_n}件まで:\n" + "\n".join(lines)
+        )
+        data = self._run_structured(
+            system, user, self._POST_GEN_SCHEMA,
+            timeout=self.settings.claude_cli_select_timeout_seconds,
+        )
+        out: list[dict] = []
+        for p in (data or {}).get("posts", []):
+            text = str(p.get("text", "")).strip()
+            if not text:
+                continue
+            idx = p.get("theme_index")
+            theme = themes[idx] if isinstance(idx, int) and 0 <= idx < len(themes) else ""
+            out.append(
+                {
+                    "theme_index": idx,
+                    "theme": theme,
+                    "type_label": str(p.get("type_label", "")).strip(),
+                    "text": text,
+                    "fill_hint": str(p.get("fill_hint", "")).strip(),
+                    "reason": str(p.get("reason", "")).strip(),
+                }
+            )
+            if len(out) >= max_n:
+                break
+        return out
+
     # --- リプライ案 ---
     def generate_reply(
         self,
@@ -288,10 +385,10 @@ class Formatter:
 誤解や的外れを避け、自分なりの考えを一度持つ。ただし調べた知識は本文にひけらかさない。
 
 ルール:
-- 必ず140字(日本語の字数)以内。1字も超えない。短く簡単なほど伸びる(これが最優先)。
-- 素の共感・面白がり・一言ツッコミでよい(「あ、そうですよね」「これ面白い」「わかる」級)。調べた内容は的外れ回避にだけ使い、解説・説明はしない。
+- 必ず140字(日本語の字数)以内。1字も超えない。短く(1〜2文)が最優先。長文の解説・知識マウントは伸びない。
+- ただの相づち(「わかる」「〜ですね」だけ)で終わらせない。短いまま、相手のフォロワーが読んで"プロフィールを見たくなる引っかかり"を1つ入れる=(a)自分が実際に試した一片、(b)相手も気づいてない短い視点、(c)気の利いた問い返し、のどれか1つ。調べた内容は的外れ回避と、この一片の裏取りに使う(解説はしない)。
 - {_length_hint("reply")}
-- 媚びすぎ・定型の褒めは避ける。賢く見せようと説明的・解説的になるのはもっと避ける。本人の口調を保つ。リプ欄で伸びる(共感/あるある/軽いツッコミ)バズの形を意識する。
+- 賢く見せようと説明的・長文になるのは避ける。媚び・定型の褒めだけ・中身のない相づちも避ける。本人の口調(AI×営業の実務家)を保つ。
 - 出力はリプライ本文のみ。字数・型・狙いなどの自己解説や「---」区切りの注記を一切付けない。
 
 {guide}""".strip()
@@ -326,9 +423,9 @@ class Formatter:
 
 ルール:
 - 必ず140字(日本語の字数)以内。1字も超えない。
-- 賢く解説しようとして説明的になるより、素直な反応＋自分の一言の短さが伸びる。調べた事実は裏取りに使い、引用は最小限に。
+- 「これ面白い」「わかる」だけで終わらせず、素直な反応＋自分の一段(試した結果/数字、相手が触れてない角度、誰に何を意味するか のどれか1つ)を必ず添える。賢く解説しようと長くするのは避け、反応＋一段の短さで伸ばす。調べた事実は裏取りに使い、引用は最小限に。
 - {_length_hint("quote")}
-- 本人の口調を保つ。拡散されやすい(視点が一つ立っている)バズの形を意識する。出力は引用本文のみ。字数・型・狙いなどの自己解説や「---」区切りの注記を一切付けない。
+- 本人の口調(AI×営業の実務家)を保つ。拡散されやすい(視点が一つ立っている)バズの形を意識する。出力は引用本文のみ。字数・型・狙いなどの自己解説や「---」区切りの注記を一切付けない。
 
 {guide}""".strip()
         url = _tweet_url(target_handle, target_tweet_id)
@@ -405,9 +502,9 @@ reply / quote の判断基準:
 
 本文ルール(この本文は叩き台。後段でウェブ検索つきに作り直すので、ここでは方向性が分かれば十分):
 - 必ず140字(日本語の字数)以内。1字も超えない。
-- reply は短く簡単に(ひと言〜短い一文)。素の共感・面白がり・一言ツッコミでよい。説明的にしない。
-- quote は自分の視点や一次情報を一段だけ添える(reply より少し長くてよい)。
-- 媚びすぎ・定型の褒めは避ける。本人の口調を保つ。
+- reply は短く(1〜2文)。ただし「わかる」級の相づちで終わらせず、自分が試した一片・短い視点・気の利いた問いを1つ入れる(プロフィールを見たくなる引っかかり)。説明的な長文にはしない。
+- quote は素直な反応＋自分の視点や一次情報を一段だけ添える(reply より少し長くてよい)。
+- 媚びすぎ・定型の褒め・中身のない相づちは避ける。本人の口調を保つ。
 - reason には選んだ理由と型の判断根拠を日本語で簡潔に書く。
 
 {guide}""".strip()

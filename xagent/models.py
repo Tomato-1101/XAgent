@@ -229,6 +229,62 @@ class NewsSettings(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class PostSettings(SQLModel, table=True):
+    """オリジナル投稿の叩き台生成(A機能)の設定。単一行(id=1)。
+
+    フォロー転換の受け皿=オリジナル発信が月2件と欠落しているため、型に沿った叩き台を
+    定期生成して下書きにする。中身の一次情報(実体験・数字)はユーザーが埋める前提。
+    生成系のため既定OFF・乱造ガード(承認待ちPOSTが post_backlog_max 以上ならスキップ)。
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    auto_post_gen_enabled: bool = False  # 既定OFF(乱造防止・恒久方針)。ONはユーザーが押す
+    max_posts_per_run: int = 2
+    post_backlog_max: int = 10  # 承認待ちPOST下書きがこれ以上なら自動生成スキップ
+    # 叩き台の切り口(テーマ角度)。formatter に渡して型に沿った叩き台を作らせる。
+    themes_json: str = (
+        '["AIを営業/BtoBの現場で使って何が変わったか(一次情報・数字)",'
+        ' "AI活用でやりがちな勘違い・つまずきと正しいやり方",'
+        ' "実際に試したAIツール/ワークフローの所感",'
+        ' "AI時代の営業・キャリアについての持論"]'
+    )
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class MetricsSettings(SQLModel, table=True):
+    """自分の投稿メトリクス取得(B機能)の設定。単一行(id=1)。
+
+    読み取りのみ(生成しない)で1日数リクエストと軽量・無害なため既定ON。
+    トグルは用意しOFFも可能。lookback_days 分の自分の投稿を定期取得して PostMetric に保存する。
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    metrics_enabled: bool = True  # 読み取りのみ・無害なので既定ON
+    lookback_days: int = 30
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class PostMetric(SQLModel, table=True):
+    """自分の投稿(手動リプ含む)の実績メトリクス。tweet_id で upsert する。
+
+    impression_count は公式API v2 の non_public_metrics 由来(自分のツイートのみ・
+    OAuth1.0a user context で取得可)。改善を数字で追えるようにするための可視化用。
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    tweet_id: str = Field(default="", index=True)
+    kind: str = ""  # post / reply / quote / repost
+    text: str = ""
+    created_at: datetime | None = None  # X上の投稿時刻(naive UTC)
+    captured_at: datetime = Field(default_factory=_utcnow)
+    impression_count: int | None = None  # non_public_metrics(自分のツイートのみ)
+    like_count: int = 0
+    retweet_count: int = 0
+    reply_count: int = 0
+    quote_count: int = 0
+    bookmark_count: int = 0
+
+
 class BlackoutSettings(SQLModel, table=True):
     """投稿/リポスト等の自分の書き込みを禁止する時間帯(制限帯)の設定。
 

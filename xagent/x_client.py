@@ -424,6 +424,72 @@ class XClient:
             )
         return out
 
+    def get_my_recent_tweets_with_metrics(
+        self, start_time: Any | None = None, max_total: int = 300
+    ) -> list[dict]:
+        """自分の投稿(手動リプ/引用含む)を実績メトリクス付きで取得する(公式API・user_auth)。
+
+        impression_count は non_public_metrics 由来で、自分のツイートのみ取得できる
+        (OAuth1.0a user context が必須)。twitterapi.io では取れないため公式APIに固定する。
+        start_time(aware datetime)以降に絞る。改善を数字で追うための可視化用(読み取り専用)。
+        返り値は {id, text, created_at, kind, impression_count|None, like/retweet/reply/quote/bookmark_count}。
+        """
+        import tweepy
+
+        me = self.get_me()
+
+        def _run() -> list[dict]:
+            out: list[dict] = []
+            kwargs: dict[str, Any] = dict(
+                id=me["id"],
+                max_results=100,
+                user_auth=True,  # non_public_metrics は本人認証が必須
+                tweet_fields=[
+                    "created_at", "public_metrics", "non_public_metrics",
+                    "referenced_tweets", "author_id",
+                ],
+            )
+            if start_time is not None:
+                kwargs["start_time"] = start_time
+            paginator = tweepy.Paginator(self._client.get_users_tweets, **kwargs)
+            for t in paginator.flatten(limit=max_total):
+                pm = getattr(t, "public_metrics", None)
+                pm = pm if isinstance(pm, dict) else {}
+                npm = getattr(t, "non_public_metrics", None)
+                npm = npm if isinstance(npm, dict) else {}
+                refs = getattr(t, "referenced_tweets", None) or []
+                kind = "post"
+                for r in refs:
+                    rt = getattr(r, "type", None)
+                    if rt == "replied_to":
+                        kind = "reply"
+                    elif rt == "quoted":
+                        kind = "quote"
+                    elif rt == "retweeted":
+                        kind = "repost"
+                impression = npm.get("impression_count")
+                if impression is None:
+                    impression = pm.get("impression_count")
+                out.append(
+                    {
+                        "id": str(getattr(t, "id", "")),
+                        "text": getattr(t, "text", ""),
+                        "created_at": getattr(t, "created_at", None),
+                        "kind": kind,
+                        "impression_count": (
+                            int(impression) if impression is not None else None
+                        ),
+                        "like_count": int(pm.get("like_count", 0)),
+                        "retweet_count": int(pm.get("retweet_count", 0)),
+                        "reply_count": int(pm.get("reply_count", 0)),
+                        "quote_count": int(pm.get("quote_count", 0)),
+                        "bookmark_count": int(pm.get("bookmark_count", 0)),
+                    }
+                )
+            return out
+
+        return self._guard("自分の投稿メトリクス取得", _run)
+
     def get_following(self, user_id: str, max_total: int = 100) -> list[dict]:
         """ユーザーがフォロー中のアカウント一覧({id, username})。
 

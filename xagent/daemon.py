@@ -132,6 +132,52 @@ def news_tick() -> None:
         log.exception("news_tick failed")
 
 
+def post_gen_tick() -> None:
+    """オリジナル投稿の叩き台の自動生成。auto_post_gen_enabled(既定OFF)で制御。
+
+    生成系のため既定OFF・乱造ガード(承認待ちPOSTが post_backlog_max 件以上ならスキップ)。
+    下書きを作るだけで投稿しない(人間承認必須)。中身の核はユーザーが埋める前提。
+    """
+    from .post_gen import get_post_settings, post_backlog_count, run_post_gen_once
+
+    try:
+        with get_session() as s:
+            cfg = get_post_settings(s)
+            if not cfg.auto_post_gen_enabled:
+                return
+            backlog = post_backlog_count(s)
+            if backlog >= cfg.post_backlog_max:
+                log.info("post_gen_tick: 承認待ちPOST%s件のためスキップ(乱造ガード)", backlog)
+                return
+            res = run_post_gen_once(s, Formatter())
+            if res["created"]:
+                notify("XAgent: オリジナル投稿の叩き台", f"{res['created']}件の下書きを生成しました")
+            log.info("post_gen_tick: %s", res)
+    except Exception:
+        log.exception("post_gen_tick failed")
+
+
+def metrics_tick() -> None:
+    """自分の投稿メトリクスの自動取得。metrics_enabled(既定ON)で制御。
+
+    公式APIで自分の直近投稿を non_public_metrics 付きで取得し PostMetric に upsert する
+    読み取りのみの処理(投稿しない)。1日数リクエストと軽量・無害なため既定ONで回す。
+    """
+    from .metrics import collect_metrics_once, get_metrics_settings
+
+    try:
+        with get_session() as s:
+            if not get_metrics_settings(s).metrics_enabled:
+                return
+            x = XClient.from_settings()
+            res = collect_metrics_once(s, x)
+            log.info("metrics_tick: %s", res)
+    except XClientError as e:
+        log.warning("metrics_tick: X資格情報未設定 (%s)", e)
+    except Exception:
+        log.exception("metrics_tick failed")
+
+
 def queue_tick() -> None:
     # 予約投稿の発火は常時動かす(ユーザー方針: 予約投稿は止めない)。
     # 全投稿の緊急停止は config.posting_enabled が、個別の制限帯/頻度ガードは process_due_queue が担う。

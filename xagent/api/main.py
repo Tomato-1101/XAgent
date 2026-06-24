@@ -30,8 +30,10 @@ from .routes import (
     drafts,
     lists,
     media,
+    metrics,
     monitor,
     news,
+    post_gen,
     posts,
     profiles,
     schedule,
@@ -57,7 +59,15 @@ async def lifespan(app: FastAPI):
         # 自動投稿はしない。
         from apscheduler.schedulers.background import BackgroundScheduler
 
-        from ..daemon import buzz_tick, celeb_tick, monitor_tick, news_tick, queue_tick
+        from ..daemon import (
+            buzz_tick,
+            celeb_tick,
+            metrics_tick,
+            monitor_tick,
+            news_tick,
+            post_gen_tick,
+            queue_tick,
+        )
 
         sched = BackgroundScheduler(timezone="UTC")
         # 予約投稿の発火: 常時。posting_enabled/認証・予約/制限帯/頻度ガードを通すので誤爆しない。
@@ -90,6 +100,20 @@ async def lifespan(app: FastAPI):
         sched.add_job(
             buzz_tick, "interval",
             seconds=settings.buzz_interval_seconds, id="buzz",
+            max_instances=1, coalesce=True,
+        )
+        # オリジナル投稿の叩き台生成: auto_post_gen_enabled(既定OFF)で内部制御＋乱造ガード。
+        # OFFなら即returnしAPI消費なし。フォロー転換の受け皿(オリジナル発信)を補う。
+        sched.add_job(
+            post_gen_tick, "interval",
+            seconds=settings.post_gen_interval_seconds, id="post_gen",
+            max_instances=1, coalesce=True,
+        )
+        # 自分の投稿メトリクス取得: metrics_enabled(既定ON)で内部制御。読み取りのみ・6時間毎。
+        # 起動直後には走らせない(--reload のワーカ再起動ごとにAPIを叩かないため。間隔到来時のみ)。
+        sched.add_job(
+            metrics_tick, "interval",
+            seconds=settings.metrics_interval_seconds, id="metrics",
             max_instances=1, coalesce=True,
         )
         sched.start()
@@ -205,6 +229,8 @@ app.include_router(analytics.router)
 app.include_router(lists.router)
 app.include_router(templates.router)
 app.include_router(news.router)
+app.include_router(post_gen.router)
+app.include_router(metrics.router)
 app.include_router(twitterapi_keys.router)
 app.include_router(jobs_router)
 

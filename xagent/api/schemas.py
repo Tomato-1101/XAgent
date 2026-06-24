@@ -172,6 +172,18 @@ class NewsSettingsRequest(BaseModel):
     max_posts_per_run: int | None = None   # 1回の生成上限
 
 
+class PostSettingsRequest(BaseModel):
+    auto_post_gen_enabled: bool | None = None  # オリジナル投稿の叩き台の自動生成(既定OFF)
+    max_posts_per_run: int | None = None       # 1回の生成上限
+    post_backlog_max: int | None = None        # 承認待ちPOSTがこれ以上なら自動生成スキップ
+    themes_json: str | None = None             # 叩き台の切り口(JSON配列文字列)
+
+
+class MetricsSettingsRequest(BaseModel):
+    metrics_enabled: bool | None = None  # 自分の投稿メトリクスの自動取得(既定ON・読み取りのみ)
+    lookback_days: int | None = None     # 何日分の自分の投稿を取得するか
+
+
 class UpdateDraftRequest(BaseModel):
     segments: list[str] | None = None
     scheduled_at: datetime | None = None
