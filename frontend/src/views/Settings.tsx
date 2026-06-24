@@ -3,7 +3,7 @@ import { api } from "../api";
 import { Button, Card, Input, Spinner, Switch } from "../components/ui";
 import { useToast } from "../components/Toast";
 import { TwitterApiKeys } from "../components/TwitterApiKeys";
-import type { BlackoutSettings, MonitorSettings } from "../types";
+import type { BlackoutSettings, MonitorSettings, PostSettings } from "../types";
 
 const TOGGLES: { key: keyof MonitorSettings; label: string; hint: string }[] = [
   { key: "mentions_enabled", label: "メンション監視", hint: "自分宛の返信案を生成（既定オフ・手動返信推奨）" },
@@ -25,11 +25,15 @@ export default function Settings() {
   const [celebStatus, setCelebStatus] = useState<string | null>(null);
   const [buzzRunning, setBuzzRunning] = useState(false);
   const [buzzStatus, setBuzzStatus] = useState<string | null>(null);
+  const [post, setPost] = useState<PostSettings | null>(null);
+  const [postGenRunning, setPostGenRunning] = useState(false);
+  const [postGenStatus, setPostGenStatus] = useState<string | null>(null);
   const toast = useToast();
 
   useEffect(() => {
     api.getMonitorSettings().then(setSettings).catch((e) => setError(String(e)));
     api.getBlackout().then(setBo).catch((e) => setError(String(e)));
+    api.getPostGenSettings().then(setPost).catch((e) => setError(String(e)));
   }, []);
 
   async function toggle(key: keyof MonitorSettings, value: boolean) {
@@ -126,6 +130,61 @@ export default function Settings() {
     } finally {
       setBuzzRunning(false);
       setBuzzStatus(null);
+    }
+  }
+
+  async function togglePostGen(value: boolean) {
+    if (!post) return;
+    setSaving(true);
+    setError(null);
+    setPost({ ...post, auto_post_gen_enabled: value });
+    try {
+      setPost(await api.putPostGenSettings({ auto_post_gen_enabled: value }));
+    } catch (e) {
+      setError(String(e));
+      api.getPostGenSettings().then(setPost).catch(() => {});
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function savePostMax(n: number) {
+    if (!post) return;
+    setSaving(true);
+    setError(null);
+    try {
+      setPost(await api.putPostGenSettings({ max_posts_per_run: Math.max(0, Math.floor(n) || 0) }));
+    } catch (e) {
+      setError(String(e));
+      api.getPostGenSettings().then(setPost).catch(() => {});
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function runPostGenOnce() {
+    setPostGenRunning(true);
+    setPostGenStatus("開始しています…");
+    try {
+      const { job_id } = await api.postGenRunOnceStart();
+      const res = await api.pollJob<{ themes: number; created: number; draft_ids: number[] }>(
+        job_id,
+        (msg, sec) => {
+          const m = Math.floor(sec / 60);
+          setPostGenStatus(`${msg || "実行中"}（経過 ${m > 0 ? `${m}分` : ""}${sec % 60}秒）`);
+        },
+      );
+      toast({
+        tone: res.created ? "success" : "info",
+        message: res.created
+          ? `オリジナル投稿の叩き台を${res.created}件生成しました（Inbox/下書きで確認・編集できます）。`
+          : "叩き台は生成されませんでした（テーマが空かもしれません）。",
+      });
+    } catch (e) {
+      toast({ tone: "error", message: `叩き台生成に失敗: ${String(e)}` });
+    } finally {
+      setPostGenRunning(false);
+      setPostGenStatus(null);
     }
   }
 
@@ -339,6 +398,53 @@ export default function Settings() {
                 {buzzRunning ? <Spinner /> : "今すぐチェック"}
               </Button>
               {buzzStatus && <span className="text-xs text-zinc-400">{buzzStatus}</span>}
+            </div>
+          </>
+        ) : (
+          <div className="text-sm text-zinc-500">読み込み中…</div>
+        )}
+      </Card>
+
+      {/* オリジナル投稿の叩き台生成(A): フォロー転換の受け皿=オリジナル発信を補う */}
+      <Card className="space-y-1">
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-zinc-400">オリジナル投稿の叩き台生成</div>
+          {saving && <Spinner />}
+        </div>
+        {post ? (
+          <>
+            <Switch
+              label="オリジナル投稿の叩き台を自動生成する"
+              hint="オンの間だけ、設定したテーマ角度から保存される型に沿った投稿の叩き台を定期生成（既定オフ・下書きのみ・自動投稿はしない）"
+              checked={Boolean(post.auto_post_gen_enabled)}
+              disabled={saving}
+              onChange={togglePostGen}
+            />
+            <div className="mt-2 flex items-center justify-between gap-3 border-t border-zinc-800 pt-3">
+              <span className="text-sm">
+                <span className="text-zinc-200">1回の最大生成数</span>
+                <span className="ml-2 text-xs text-zinc-500">1回で作る叩き台の上限。</span>
+              </span>
+              <Input
+                type="number"
+                min={0}
+                className="w-24 shrink-0"
+                defaultValue={post.max_posts_per_run}
+                disabled={saving}
+                onBlur={(e) => savePostMax(Number(e.target.value))}
+              />
+            </div>
+            <p className="pt-1 text-xs text-zinc-500">
+              叩き台は型・構成・フックまでAIが作り、実体験・数字など一次情報は
+              <span className="text-zinc-300">〔 〕の箇所をあなたが埋める</span>前提です（AIに実績を捏造させない）。
+              既定はオフ。オンのままにすると一定間隔で下書きが増え続けます（終わったらオフに）。
+              手動で1回だけ作るなら下のボタン（乱造ガードを通りません）。
+            </p>
+            <div className="flex items-center gap-3 pt-2">
+              <Button size="sm" variant="outline" onClick={runPostGenOnce} disabled={postGenRunning}>
+                {postGenRunning ? <Spinner /> : "今すぐ生成"}
+              </Button>
+              {postGenStatus && <span className="text-xs text-zinc-400">{postGenStatus}</span>}
             </div>
           </>
         ) : (

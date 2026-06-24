@@ -153,6 +153,43 @@ export interface NewsRecentResponse {
   last_digest_id: number;
 }
 
+// オリジナル投稿の叩き台生成(A機能)の設定。
+export interface PostSettings {
+  id?: number;
+  auto_post_gen_enabled: boolean; // オリジナル投稿の叩き台の自動生成(既定OFF・乱造ガード)
+  max_posts_per_run: number; // 1回の生成上限
+  post_backlog_max: number; // 承認待ちPOSTがこれ以上なら自動生成スキップ
+  themes_json: string; // 叩き台の切り口(JSON配列文字列)
+  updated_at?: string;
+}
+
+// 自分の投稿メトリクス取得(B機能)の設定。読み取りのみ・既定ON。
+export interface MetricsSettings {
+  id?: number;
+  metrics_enabled: boolean; // 自分の投稿メトリクスの自動取得(既定ON・読み取りのみ)
+  lookback_days: number; // 何日分の自分の投稿を取得するか
+  updated_at?: string;
+}
+
+// 種別別の実績集計(平均インプ/いいね/RT/リプ/引用/ブックマーク)。
+export interface MetricsAgg {
+  count: number;
+  avg_impressions: number | null;
+  median_impressions: number | null;
+  avg_likes: number;
+  avg_retweets: number;
+  avg_replies: number;
+  avg_quotes: number;
+  avg_bookmarks: number;
+  sum_bookmarks: number;
+}
+
+export interface MetricsSummary {
+  total: MetricsAgg;
+  by_kind: Record<string, MetricsAgg>; // post / reply / quote / repost
+  captured_at: string | null; // 最後に取得した時刻(naive UTC ISO)
+}
+
 export type MediaKind = "image" | "video" | "other";
 
 export interface MediaItem {

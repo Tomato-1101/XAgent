@@ -9,9 +9,12 @@ import type {
   ListCreateResult,
   Me,
   MediaItem,
+  MetricsSettings,
+  MetricsSummary,
   MonitorSettings,
   NewsRecentResponse,
   NewsSettings,
+  PostSettings,
   PreviewResponse,
   PromptTemplate,
   RecentPost,
@@ -362,6 +365,22 @@ export const api = {
   getNewsSettings: () => req<NewsSettings>("/news/settings"),
   putNewsSettings: (values: Partial<NewsSettings>) =>
     req<NewsSettings>("/news/settings", { method: "PUT", body: JSON.stringify(values) }),
+
+  // オリジナル投稿の叩き台生成(A): テーマ角度から型に沿った下書きを生成。ジョブ開始のみ(追跡は pollJob)。
+  postGenRunOnceStart: (limit?: number) =>
+    req<{ job_id: string }>(`/post-gen/run-once${limit != null ? `?limit=${limit}` : ""}`, {
+      method: "POST",
+    }),
+  getPostGenSettings: () => req<PostSettings>("/post-gen/settings"),
+  putPostGenSettings: (values: Partial<PostSettings>) =>
+    req<PostSettings>("/post-gen/settings", { method: "PUT", body: JSON.stringify(values) }),
+
+  // 自分の投稿メトリクス(B): 公式APIで取得・保存(読み取りのみ)。ジョブ開始のみ。集計は metricsSummary。
+  metricsRunOnceStart: () => req<{ job_id: string }>("/metrics/run-once", { method: "POST" }),
+  metricsSummary: () => req<MetricsSummary>("/metrics/summary"),
+  getMetricsSettings: () => req<MetricsSettings>("/metrics/settings"),
+  putMetricsSettings: (values: Partial<MetricsSettings>) =>
+    req<MetricsSettings>("/metrics/settings", { method: "PUT", body: JSON.stringify(values) }),
 
   listProfiles: () => req<AccountProfile[]>("/profiles"),
   learnProfile: (handle: string, max_total = 200, is_self = false) =>
