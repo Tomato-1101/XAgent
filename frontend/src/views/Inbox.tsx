@@ -246,8 +246,10 @@ export default function Inbox({ me }: { me: Me | null }) {
   async function doSend(draft: Draft, override: boolean) {
     setSending(true);
     setError(null);
+    let approved = false;
     try {
       await api.approve(draft.id);
+      approved = true;
       const posted = await api.postNow(draft.id, override);
       if (posted.posted_tweet_id) {
         toast({
@@ -261,7 +263,10 @@ export default function Inbox({ me }: { me: Me | null }) {
       reload();
     } catch (e) {
       setError(String(e));
-      toast({ tone: "error", message: `失敗しました: ${String(e)}` });
+      // 承認だけ通って送信に失敗した案は status=APPROVED になり、DRAFTのみ並ぶこの画面から
+      // 消える。どこに移ったかを示さないと再送信の導線を見失うので必ず添える。
+      const where = approved ? " 案はQueueの「承認済み」タブにあります。" : "";
+      toast({ tone: "error", message: `失敗しました: ${String(e)}${where}` });
     } finally {
       setSending(false);
     }

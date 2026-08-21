@@ -18,8 +18,12 @@ router = APIRouter(prefix="/media", tags=["media"], dependencies=[Depends(requir
 async def upload(file: UploadFile = File(...)) -> dict:
     if not is_allowed_filename(file.filename):
         raise HTTPException(400, "対応していない形式です(jpg/png/webp/gif/mp4/mov)。")
+    too_big = f"ファイルが大きすぎます(上限{MAX_BYTES // (1024 * 1024)}MB)。"
+    # 全内容をメモリに展開する前に判定する(size は Starlette が multipart 受信時に埋める)。
+    if file.size is not None and file.size > MAX_BYTES:
+        raise HTTPException(413, too_big)
     data = await file.read()
-    if len(data) > MAX_BYTES:
-        raise HTTPException(413, f"ファイルが大きすぎます(上限{MAX_BYTES // (1024 * 1024)}MB)。")
+    if len(data) > MAX_BYTES:  # size が取れない経路のための保険
+        raise HTTPException(413, too_big)
     path = save_bytes(file.filename, data)
     return {"path": path, "kind": classify(path), "filename": file.filename}

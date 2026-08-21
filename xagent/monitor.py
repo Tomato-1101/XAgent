@@ -1,7 +1,8 @@
 """受信監視。メンション/自分宛リプライと、絡み対象(有名人等)の直近24時間の投稿を収集し、
 AIのバッチ判断で「絡む価値が高い投稿」を分散選定して下書き(未承認)を生成する。承認は人間が行う。
 
-メンションは MonitorCursor(since_id) で重複を防ぐ。絡み案は since_id を使わず24時間窓で
+メンションは MonitorCursor(since_id) と既存Draftの重複チェックの両方で二重生成を防ぐ。
+絡み案は since_id を使わず24時間窓で
 毎回取り直し、「同じ tweet を対象にした Draft が既にあれば(状態問わず)再生成しない」ことで
 重複と乱造(却下済みへの再生成)を防ぐ。
 """
@@ -158,20 +159,37 @@ def poll_mentions(
         _within_age(_drop_reposts(x_client.get_mentions(me_user_id, since_id=cur.last_seen_id))),
         limit,
     )
+    # 絡み案と同じ重複防止: 同じ tweet を対象にした Draft が既にあれば(状態問わず)作らない。
+    # 途中の生成が失敗してカーソルが進まなかった分の作り直しを止める。
+    existing = {
+        tid
+        for tid in session.exec(
+            select(Draft.target_tweet_id).where(Draft.target_tweet_id != None)  # noqa: E711
+        ).all()
+        if tid
+    }
     created = 0
-    for t in tweets:
-        create_reply_draft(
-            session, formatter, t["id"], t.get("text", ""),
-            target_handle=t.get("author_id"), target_created_at=t.get("created_at"),
-            target_view_count=t.get("view_count"), target_like_count=t.get("like_count"),
-            target_retweet_count=t.get("retweet_count"),
-        )
-        created += 1
-    new_max = _max_id([t["id"] for t in tweets])
-    if new_max:
-        cur.last_seen_id = new_max
-        session.add(cur)
-        session.commit()
+    # 古い順に処理し、1件ごとにカーソルを進める(途中で例外が出ても処理済み分は次回に残らない)。
+    for t in sorted(
+        tweets, key=lambda t: int(t["id"]) if str(t.get("id", "")).isdigit() else 0
+    ):
+        tid = str(t.get("id", ""))
+        if tid and tid not in existing:
+            create_reply_draft(
+                session, formatter, tid, t.get("text", ""),
+                target_handle=t.get("author_handle") or t.get("author_id"),
+                target_created_at=t.get("created_at"),
+                target_view_count=t.get("view_count"), target_like_count=t.get("like_count"),
+                target_retweet_count=t.get("retweet_count"),
+            )
+            existing.add(tid)
+            created += 1
+        # 生成済み・重複スキップのどちらもここまで処理済み。例外で抜けた分だけ次回に残る。
+        new_max = _max_id([tid, cur.last_seen_id or ""])
+        if new_max and new_max != cur.last_seen_id:
+            cur.last_seen_id = new_max
+            session.add(cur)
+            session.commit()
     return created, 0
 
 

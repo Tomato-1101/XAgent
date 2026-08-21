@@ -91,25 +91,37 @@ def refresh(
 
     log_cost(session, CostKind.READ, units=len(tweets), note="posts:refresh")
     username = me.get("username")
+    # 既存行はツイートIDで一括取得する(1件ずつSELECTすると最大400クエリになる)。
+    ids = [t["id"] for t in tweets]
+    rows: dict[str, PastPost] = (
+        {
+            r.tweet_id: r
+            for r in session.exec(
+                select(PastPost).where(PastPost.tweet_id.in_(ids))  # type: ignore[attr-defined]
+            ).all()
+        }
+        if ids
+        else {}
+    )
     for t in tweets:
         tid = t["id"]
-        row = session.exec(select(PastPost).where(PastPost.tweet_id == tid)).first()
+        row = rows.get(tid)
         created = _to_naive_utc(t.get("created_at"))
         like = int(t.get("like_count", 0))
         rt = int(t.get("retweet_count", 0))
         if row is None:
-            session.add(
-                PastPost(
-                    tweet_id=tid,
-                    text=t.get("text", ""),
-                    created_at=created,
-                    like_count=like,
-                    retweet_count=rt,
-                    author_user_id=me["id"],
-                    author_handle=username,
-                    is_own=True,
-                )
+            row = PastPost(
+                tweet_id=tid,
+                text=t.get("text", ""),
+                created_at=created,
+                like_count=like,
+                retweet_count=rt,
+                author_user_id=me["id"],
+                author_handle=username,
+                is_own=True,
             )
+            rows[tid] = row  # 同一IDが2回来ても行を二重に作らない
+            session.add(row)
         else:
             # メトリクスは時間で増えるので更新。所有情報も補完する。
             row.like_count = like

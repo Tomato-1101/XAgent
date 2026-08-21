@@ -214,8 +214,15 @@ class XClient:
 
         tweepy の Client.retweet は認証ユーザーの user_id を自動で使う。
         返り値は対象 tweet_id(RT自体には新規IDが無いため、リンク用に対象IDを返す)。
+        応答が retweeted=false を明示したとき(既にリポスト済み等)は失敗として扱い、
+        投稿済み記録が残らないようにする。フィールドが無い応答は従来どおり成功扱い。
         """
-        self._client.retweet(tweet_id)
+        resp = self._client.retweet(tweet_id)
+        data = getattr(resp, "data", None)
+        if isinstance(data, dict) and data.get("retweeted") is False:
+            raise XClientError(
+                f"リポストが成立しませんでした(既にリポスト済みの可能性: {tweet_id})。"
+            )
         return str(tweet_id)
 
     def upload_media(self, path: str) -> str:

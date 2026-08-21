@@ -406,7 +406,7 @@ export default function Compose() {
         <Card className="border-red-900/60 text-sm text-red-300">
           エラー: {error}
           <div className="mt-1 text-xs text-zinc-500">
-            整形にはバックエンドの ANTHROPIC_API_KEY 設定が必要です。
+            整形はバックエンドの Claude Code CLI で実行します。サーバ側で `claude` が使えるか（ログイン済みか）を確認してください。
           </div>
         </Card>
       )}

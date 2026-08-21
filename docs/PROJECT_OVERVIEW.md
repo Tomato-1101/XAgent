@@ -320,7 +320,7 @@ XAgent は、テキストを投げると AI(Claude)が運用者のノウハウ�
 
 `create_all` が既存テーブルに列追加しない欠点を補うのが `_migrate()`。`_ADDED_COLUMNS` は `{テーブル名: [(列名, SQLite型, デフォルト句), ...]}` で、`PRAGMA table_info` で既存列を調べ、無い列だけ `ALTER TABLE ... ADD COLUMN` する(前方追加専用。型変更・列削除・データ移行はしない)。
 
-`_ADDED_COLUMNS` の全列: `pastpost`(`author_user_id`/`author_handle`/`is_own DEFAULT 1`)、`draft`(`blackout_override DEFAULT 0`/`target_text DEFAULT ''`/`target_created_at`/`schedule_missed DEFAULT 0`/`target_view_count`/`target_like_count`/`target_retweet_count`)、`monitorsettings`(`max_drafts_per_run DEFAULT 10`/`auto_monitor_enabled DEFAULT 1`/`auto_post_enabled DEFAULT 1`/`min_impressions DEFAULT 10000`/`celeb_watch_enabled DEFAULT 0`/`celeb_list_id`/`buzz_watch_enabled DEFAULT 0`/`buzz_min_faves DEFAULT 3000`)、`engagetarget`(`list_id`)。
+`_ADDED_COLUMNS` の全列: `pastpost`(`author_user_id`/`author_handle`/`is_own DEFAULT 1`)、`draft`(`blackout_override DEFAULT 0`/`target_text DEFAULT ''`/`target_created_at`/`schedule_missed DEFAULT 0`/`target_view_count`/`target_like_count`/`target_retweet_count`)、`monitorsettings`(`max_drafts_per_run DEFAULT 10`/`auto_monitor_enabled DEFAULT 0`/`auto_post_enabled DEFAULT 0`/`min_impressions DEFAULT 10000`/`celeb_watch_enabled DEFAULT 0`/`celeb_list_id`/`buzz_watch_enabled DEFAULT 0`/`buzz_min_faves DEFAULT 3000`)、`engagetarget`(`list_id`)。
 
 ハマりどころ: **モデルに新フィールドを足したら、既存DBへ反映するには `_ADDED_COLUMNS` への追記も必要**(`create_all` だけでは既存テーブルに列が増えない)。
 
@@ -978,7 +978,7 @@ SQLite `xagent.db`(`DB_PATH` 既定)。容量上限 `MAX_DB_BYTES`(既定2GB)超
 
 ### UX 表示(修正項目 M3)
 
-- `poll_mentions`/`poll_genre` は `target_handle` に `author_id`(数値ID)を渡すため、リプライ案の表示が `@123456...` になる。ただし実投稿の宛先は `target_tweet_id` で行うため**送信は正しい**(表示のみの問題)。
+- `poll_mentions` は `target_handle` に `author_handle`(無ければ `author_id`)を渡す。twitterapi.io 経由ならハンドルが入るが、公式APIフォールバック経路は `author_handle` を持たないため従来どおり `@123456...`(数値ID)表示になる。ただし実投稿の宛先は `target_tweet_id` で行うため**送信は正しい**(表示のみの問題)。
 
 ### 未修正・記録のみ
 

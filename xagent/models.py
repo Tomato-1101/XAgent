@@ -194,7 +194,7 @@ class MonitorSettings(SQLModel, table=True):
     auto_monitor_enabled: bool = False
     # 予約投稿は常時実行する方針のため現在は未使用(緊急停止は config.posting_enabled が担う)。
     # 互換のため列は残す。
-    auto_post_enabled: bool = True
+    auto_post_enabled: bool = False  # 自動送信系は既定OFF（恒久方針）。マイグレーション既定とも一致させる
     # 1監視サイクルで作る下書きの総数上限。一気に生成しすぎてAPIを圧迫しないための安全弁。
     max_drafts_per_run: int = 10
     # 絡み候補の最低インプレッション。これ未満の投稿には絡まない(伸びていない投稿への

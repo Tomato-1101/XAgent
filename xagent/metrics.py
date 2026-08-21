@@ -74,15 +74,26 @@ def collect_metrics_once(
 
     inserted = 0
     updated = 0
+    # 既存行はツイートIDで一括取得する(1件ずつSELECTするとツイート数だけクエリが飛ぶ)。
+    ids = [i for i in (str(t.get("id") or "") for t in tweets) if i]
+    rows: dict[str, PostMetric] = (
+        {
+            r.tweet_id: r
+            for r in session.exec(
+                select(PostMetric).where(PostMetric.tweet_id.in_(ids))  # type: ignore[attr-defined]
+            ).all()
+        }
+        if ids
+        else {}
+    )
     for t in tweets:
         tid = str(t.get("id") or "")
         if not tid:
             continue
-        row = session.exec(
-            select(PostMetric).where(PostMetric.tweet_id == tid)
-        ).first()
+        row = rows.get(tid)
         if row is None:
             row = PostMetric(tweet_id=tid, created_at=_to_naive_utc(t.get("created_at")))
+            rows[tid] = row  # 同一IDが2回来ても行を二重に作らない
             inserted += 1
         else:
             updated += 1

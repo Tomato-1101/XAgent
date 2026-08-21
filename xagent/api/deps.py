@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Callable, Iterator
 
 from fastapi import Header, HTTPException
@@ -23,7 +24,11 @@ def require_api_token(x_api_token: str | None = Header(default=None)) -> None:
     (リモートアクセス用。開放は /health と /media/files 静的配信のみ)。
     """
     token = get_settings().api_token
-    if token and x_api_token != token:
+    # 比較は定数時間で行う(トークン長・先頭一致がレスポンス時間に漏れないように)。
+    # bytes で比較する: compare_digest は非ASCIIの str を渡すと TypeError になるため。
+    if token and not secrets.compare_digest(
+        (x_api_token or "").encode("utf-8"), token.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="X-API-Token が不正です。")
 
 

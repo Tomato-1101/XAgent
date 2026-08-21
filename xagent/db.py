@@ -46,8 +46,9 @@ _ADDED_COLUMNS = {
     ],
     "monitorsettings": [
         ("max_drafts_per_run", "INTEGER", "DEFAULT 10"),
-        ("auto_monitor_enabled", "BOOLEAN", "DEFAULT 1"),
-        ("auto_post_enabled", "BOOLEAN", "DEFAULT 1"),
+        # 既定OFF(乱造防止)。旧DBへ列追加したときに自動生成がひとりでに始まらないよう 0。
+        ("auto_monitor_enabled", "BOOLEAN", "DEFAULT 0"),
+        ("auto_post_enabled", "BOOLEAN", "DEFAULT 0"),
         ("min_impressions", "INTEGER", "DEFAULT 10000"),
         ("celeb_watch_enabled", "BOOLEAN", "DEFAULT 0"),
         ("celeb_list_id", "VARCHAR", ""),

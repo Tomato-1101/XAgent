@@ -17,9 +17,10 @@ def notify(title: str, message: str) -> bool:
     osascript = shutil.which("osascript")
     if not osascript:
         return False
-    # AppleScript文字列に渡すため二重引用符をエスケープ
-    safe_msg = message.replace('"', '\\"')
-    safe_title = title.replace('"', '\\"')
+    # AppleScript文字列に渡すためエスケープ。バックスラッシュ→二重引用符の順(逆にすると
+    # 直前に付けた \ をさらにエスケープしてしまい、末尾が \ の本文で構文エラーになる)。
+    safe_msg = message.replace("\\", "\\\\").replace('"', '\\"')
+    safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
     script = f'display notification "{safe_msg}" with title "{safe_title}"'
     try:
         subprocess.run([osascript, "-e", script], check=False, timeout=5)
